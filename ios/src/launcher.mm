@@ -603,6 +603,8 @@ NSString* SettingsPath(const fs::path& docs) {
   return [NSString stringWithUTF8String:(docs / "settings.json").c_str()];
 }
 
+void SaveSettings(const fs::path& docs, NSDictionary<NSString*, NSString*>* s);
+
 NSMutableDictionary<NSString*, NSString*>* LoadSettings(const fs::path& docs) {
   NSMutableDictionary<NSString*, NSString*>* s = [NSMutableDictionary dictionary];
   NSData* data = [NSData dataWithContentsOfFile:SettingsPath(docs)];
