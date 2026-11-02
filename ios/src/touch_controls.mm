@@ -110,7 +110,7 @@ void SetPadState(int buttons, float lx, float ly, float rx, float ry, float lt, 
     desc.naxes = kAxes;
     desc.nbuttons = kButtons;
     desc.nhats = 0;
-    desc.name = "NFSMW touch controls";
+    desc.name = "NFS Carbon Touch Controls";
     const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
     if (id != 0) {
       g_pad = SDL_OpenJoystick(id);
@@ -141,7 +141,8 @@ void SetPadState(int buttons, float lx, float ly, float rx, float ry, float lt, 
 // ---------------------------------------------------------------------------
 //  The controls
 // ---------------------------------------------------------------------------
-enum class Kind { kStick, kRoundButton, kRectButton, kTrigger, kDpad };
+enum class Kind { kStick, kRoundButton, kRectButton, kTrigger, kDpad, kSteerArrow, kSteerWheel };
+enum class SteeringMode { kArrows = 0, kStick = 1, kWheel = 2 };
 
 struct Control {
   Kind kind;
@@ -153,6 +154,7 @@ struct Control {
   int axis = -1;   // sticks: 0 left, 1 right; triggers: 0 LT, 1 RT
   bool horizontal = false;  // sticks: left/right only (the steering circle)
   float right_y = 0;        // buttons that push the right stick up/down (shifting)
+  float steer_val = 0.0f;   // for arrow buttons / rocker steering (-1.0 to +1.0)
   // State.
   bool pressed = false;
   CGPoint knob{0, 0};  // sticks: -1..1
@@ -163,6 +165,10 @@ struct Control {
       // A little slack around the rectangle, easier to hit with a thumb.
       return std::fabs(p.x - center.x) <= size.width * 0.5 + 8 &&
              std::fabs(p.y - center.y) <= size.height * 0.5 + 8;
+    }
+    if (kind == Kind::kSteerArrow) {
+      // Generous ergonomic hit box for arrow buttons and slide-to-steer rocker
+      return std::hypot(p.x - center.x, p.y - center.y) <= radius * 1.35;
     }
     // Sticks take touches a bit beyond their ring.
     const CGFloat r = kind == Kind::kStick ? radius * 1.35 : radius * 1.15;
@@ -195,9 +201,13 @@ struct Control {
   std::vector<uint64_t> _drawnLook;  // each control's look when last drawn
   NSMapTable<UITouch*, NSNumber*>* _owners;  // touch -> control index
   CGRect _toggle;
-  CGRect _modeToggle;  // DRIVE/PAD
-  CGRect _snap;        // SNAP (nfsmw_native_dump_manual): a renderer snapshot; empty when off
+  CGRect _modeToggle;   // DRIVE/PAD
+  CGRect _steerToggle;  // STEERING MODE: ARROWS / STICK / WHEEL
+  CGRect _snap;         // SNAP (nfsmw_native_dump_manual): a renderer snapshot; empty when off
   BOOL _driving;
+  SteeringMode _steeringMode;
+  float _currentSteer;
+  float _targetSteer;
   BOOL _controlsVisible;
   UIImpactFeedbackGenerator* _haptic;
   // The layout editor (launcher: Customize touch controls): touches move
@@ -247,7 +257,14 @@ static CGFloat TouchOpacity() {
     // connected (a tap brings them back).
     _controlsVisible = !GCController.current && !(KeyboardControlsOn() && GCKeyboard.coalescedKeyboard);
     _driving = [NSUserDefaults.standardUserDefaults boolForKey:@"nfsmw.touch.driving"];
-    _haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    _steeringMode = static_cast<SteeringMode>(
+        [NSUserDefaults.standardUserDefaults integerForKey:@"nfsc.touch.steering_mode"]);
+    _currentSteer = 0.0f;
+    _targetSteer = 0.0f;
+    _haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    self.layer.zPosition = 9999.0f;
+    self.userInteractionEnabled = YES;
+    self.multipleTouchEnabled = YES;
     _selected = -1;
     self.alpha = TouchOpacity();
     // The drawing is recorded here and rasterized on Core Animation's own
@@ -350,9 +367,10 @@ static CGFloat TouchOpacity() {
   _drawnLook.clear();
   _controls.clear();
   _toggle = CGRectMake(w * .5 - unit * .9, h * .02, unit * 1.8, unit * .5);
-  _modeToggle = CGRectOffset(_toggle, -(_toggle.size.width + unit * .3), 0);
+  _modeToggle = CGRectOffset(_toggle, -(_toggle.size.width + unit * .25), 0);
+  _steerToggle = CGRectOffset(_toggle, (_toggle.size.width + unit * .25), 0);
   static const bool snap = rex::cvar::Query<bool>("nfsmw_native_dump_manual");
-  _snap = snap ? CGRectOffset(_toggle, _toggle.size.width + unit * .3, 0) : CGRectZero;
+  _snap = snap ? CGRectOffset(_steerToggle, _steerToggle.size.width + unit * .25, 0) : CGRectZero;
   if (_driving) {
     [self layoutDriving:w height:h unit:unit];
     [self releaseAll];
@@ -447,7 +465,7 @@ static CGFloat TouchOpacity() {
   [self setNeedsDisplay];
 }
 
-// The DRIVE layout (positions as fractions of the view, from the sketch).
+// The DRIVE layout (ergonomic racing layout with steering mode support).
 - (void)layoutDriving:(CGFloat)w height:(CGFloat)h unit:(CGFloat)unit {
   auto P = [&](CGFloat fx, CGFloat fy) { return CGPointMake(w * fx, h * fy); };
   auto round = [&](NSString* l, CGPoint c, CGFloat r, int bit) {
@@ -455,35 +473,69 @@ static CGFloat TouchOpacity() {
     k.bit = bit;
     _controls.push_back(k);
   };
-  Control steer{Kind::kStick, @"", P(.115, .78), unit * 1.15};
-  steer.axis = 0;
-  steer.horizontal = true;
-  _controls.push_back(steer);
+  auto rect = [&](Kind kind, NSString* l, CGPoint c, CGSize s, int bit, int axis) {
+    Control k{kind, l, c, 0, s};
+    k.bit = bit;
+    k.axis = axis;
+    _controls.push_back(k);
+  };
+
+  // 1. Steering System (Left Thumb)
+  if (_steeringMode == SteeringMode::kArrows) {
+    // Arrow Keys (◀ / ▶) with slide-to-steer thumb rocker
+    Control leftArrow{Kind::kSteerArrow, @"◀", P(.085, .78), unit * 0.72};
+    leftArrow.axis = 0;
+    leftArrow.steer_val = -1.0f;
+    _controls.push_back(leftArrow);
+
+    Control rightArrow{Kind::kSteerArrow, @"▶", P(.205, .78), unit * 0.72};
+    rightArrow.axis = 0;
+    rightArrow.steer_val = 1.0f;
+    _controls.push_back(rightArrow);
+  } else if (_steeringMode == SteeringMode::kStick) {
+    // Analog Stick
+    Control steer{Kind::kStick, @"", P(.145, .78), unit * 1.15};
+    steer.axis = 0;
+    steer.horizontal = true;
+    _controls.push_back(steer);
+  } else {
+    // Horizontal Touch Wheel / Slider
+    Control wheel{Kind::kStick, @"WHEEL", P(.145, .78), unit * 1.25};
+    wheel.axis = 0;
+    wheel.horizontal = true;
+    _controls.push_back(wheel);
+  }
+
+  // 2. Shifting & Rear-View (Left Thumb Secondary)
   auto shift = [&](NSString* l, CGPoint c, float y) {
     Control k{Kind::kRoundButton, l, c, unit * .42};
     k.right_y = y;
     _controls.push_back(k);
   };
-  shift(@"DOWN", P(.075, .52), kDriveShiftDown);
-  shift(@"UP", P(.165, .52), kDriveShiftUp);
-  round(@"NOS", P(.235, .86), unit * .5, kDriveNitrous);
-  round(@"LOOK\nBACK", P(.235, .62), unit * .42, kDriveLookBack);
-  round(@"CREW\nWINGMAN", P(.635, .58), unit * .65, kDriveWingman);
-  round(@"SPEED\nBREAKER", P(.765, .58), unit * .8, kDriveSpeedbreaker);
-  round(@"HAND\nBRAKE", P(.9, .58), unit * .8, kDriveHandbrake);
-  Control brake{Kind::kTrigger, @"BRAKE", P(.765, .84), 0, CGSizeMake(unit * 1.05, unit * 1.75)};
-  brake.axis = 0;
-  _controls.push_back(brake);
-  Control accel{Kind::kTrigger, @"GAS", P(.9, .84), 0, CGSizeMake(unit * 1.05, unit * 1.75)};
-  accel.axis = 1;
-  _controls.push_back(accel);
-  round(@"CAM", P(.455, .17), unit * .36, kDriveCamera);
-  round(@"PAUSE", P(.545, .17), unit * .36, kDrivePause);
-  round(@"RESET", P(.5, .86), unit * .36, kDriveReset);
-  // The D-pad, for what free roam puts on it (shops and safehouses, the
-  // Blacklist, the map, messages) and for menus.
-  Control dpad{Kind::kDpad, @"", P(.11, .27), unit * .72};
+  shift(@"DOWN", P(.065, .58), kDriveShiftDown);
+  shift(@"UP", P(.165, .58), kDriveShiftUp);
+  round(@"LOOK\nBACK", P(.065, .44), unit * .40, kDriveLookBack);
+
+  // 3. Ergonomic Right-Thumb Racing Arc
+  // Oversized GAS (RT) and BRAKE (LT) Pedals
+  rect(Kind::kTrigger, @"BRAKE", P(.760, .82), CGSizeMake(unit * 1.25, unit * 2.05), 0, 0);
+  rect(Kind::kTrigger, @"GAS", P(.905, .82), CGSizeMake(unit * 1.30, unit * 2.05), 0, 1);
+
+  // Primary Action Arc: HANDBRAKE (A), NITROUS (B), SPEEDBREAKER (X), WINGMAN (Y/LB)
+  round(@"HAND\nBRAKE", P(.885, .54), unit * 0.65, kDriveHandbrake);
+  round(@"NOS", P(.755, .54), unit * 0.65, kDriveNitrous);
+  round(@"SPEED\nBREAKER", P(.635, .66), unit * 0.60, kDriveSpeedbreaker);
+  round(@"CREW\nWINGMAN", P(.635, .50), unit * 0.60, kDriveWingman);
+
+  // 4. Utility / Top Bar Buttons
+  round(@"CAM", P(.445, .15), unit * .36, kDriveCamera);
+  round(@"PAUSE", P(.555, .15), unit * .36, kDrivePause);
+  round(@"RESET", P(.500, .88), unit * .36, kDriveReset);
+
+  // 5. In-game Navigation D-pad (Free roam, map, messages)
+  Control dpad{Kind::kDpad, @"", P(.110, .27), unit * .70};
   _controls.push_back(dpad);
+
   [self applyCustomLayout];
 }
 
@@ -495,7 +547,7 @@ static CGFloat TouchOpacity() {
   if (!_controlsVisible) {
     return self;  // any tap brings the controls back
   }
-  if (CGRectContainsPoint(_toggle, p) || CGRectContainsPoint(_modeToggle, p) || CGRectContainsPoint(_snap, p)) {
+  if (CGRectContainsPoint(_toggle, p) || CGRectContainsPoint(_modeToggle, p) || CGRectContainsPoint(_steerToggle, p) || CGRectContainsPoint(_snap, p)) {
     return self;
   }
   for (const Control& c : _controls) {
@@ -517,6 +569,12 @@ static CGFloat TouchOpacity() {
 
 - (void)updateControl:(Control&)c at:(CGPoint)p {
   switch (c.kind) {
+    case Kind::kSteerArrow: {
+      // Direct touch on button
+      _targetSteer = c.steer_val;
+      c.knob = CGPointMake(c.steer_val, 0);
+      break;
+    }
     case Kind::kStick: {
       CGFloat dx = (p.x - c.center.x) / c.radius,
               dy = c.horizontal ? 0 : (p.y - c.center.y) / c.radius;
@@ -526,6 +584,7 @@ static CGFloat TouchOpacity() {
         dy /= len;
       }
       c.knob = CGPointMake(dx, dy);
+      _targetSteer = float(dx);
       break;
     }
     case Kind::kDpad: {
@@ -579,6 +638,14 @@ static CGFloat TouchOpacity() {
     if (CGRectContainsPoint(_modeToggle, p)) {
       _driving = !_driving;
       [NSUserDefaults.standardUserDefaults setBool:_driving forKey:@"nfsmw.touch.driving"];
+      [_haptic impactOccurred];
+      [self setNeedsLayout];
+      return;
+    }
+    if (CGRectContainsPoint(_steerToggle, p)) {
+      int next = (static_cast<int>(_steeringMode) + 1) % 3;
+      _steeringMode = static_cast<SteeringMode>(next);
+      [NSUserDefaults.standardUserDefaults setInteger:next forKey:@"nfsc.touch.steering_mode"];
       [_haptic impactOccurred];
       [self setNeedsLayout];
       return;
@@ -671,8 +738,17 @@ static CGFloat TouchOpacity() {
 - (void)sendState {
   int buttons = 0;
   float axes[4] = {}, triggers[2] = {};
+  float arrow_steer = 0.0f;
+  bool arrow_active = false;
+
   for (const Control& c : _controls) {
     switch (c.kind) {
+      case Kind::kSteerArrow:
+        if (c.pressed) {
+          arrow_steer += c.steer_val;
+          arrow_active = true;
+        }
+        break;
       case Kind::kStick:
         axes[c.axis * 2] = float(c.knob.x);
         axes[c.axis * 2 + 1] = float(c.knob.y);
@@ -693,6 +769,29 @@ static CGFloat TouchOpacity() {
         break;
     }
   }
+  if (arrow_active) {
+    _targetSteer = std::clamp(arrow_steer, -1.0f, 1.0f);
+  } else if (_steeringMode == SteeringMode::kArrows) {
+    _targetSteer = 0.0f;
+  }
+
+  // Response tuning: Progressive Smooth (0.35) -> Digital Direct (1.0)
+  const float prevSteer = _currentSteer;
+  const float responseRate = 0.72f;
+  _currentSteer = _currentSteer * (1.0f - responseRate) + _targetSteer * responseRate;
+  if (std::abs(_currentSteer) < 0.02f && std::abs(_targetSteer) < 0.02f) {
+    _currentSteer = 0.0f;
+  }
+
+  // CoreHaptics crossover feedback when crossing deadzone
+  if ((prevSteer < -0.1f && _currentSteer >= 0.0f) || (prevSteer > 0.1f && _currentSteer <= 0.0f)) {
+    [_haptic impactOccurred];
+  }
+
+  if (_steeringMode == SteeringMode::kArrows || arrow_active) {
+    axes[0] = _currentSteer;
+  }
+
   if (!_editing) {
     SetPadState(buttons, axes[0], axes[1], axes[2], axes[3], triggers[0], triggers[1]);
   }
@@ -759,8 +858,8 @@ static CGFloat TouchOpacity() {
 // label did (IPA86-88). The view stays for the touches; its own layer is left
 // empty and untouched.
 - (BOOL)wantsNative {
-  static const bool on = rex::cvar::Query<bool>("ios_touch_native");
-  return on && !_editing && nfsmw_native_overlay_active();
+  // Always render touch controls through UIKit top layer so they are never hidden
+  return NO;
 }
 
 - (void)syncNativeMode {
@@ -889,6 +988,22 @@ static CGFloat TouchOpacity() {
   [self drawLabel:(_driving ? @"PAD" : @"DRIVE")
                at:CGPointMake(CGRectGetMidX(_modeToggle), CGRectGetMidY(_modeToggle))
              size:_modeToggle.size.height * 0.42];
+
+  // The STEERING MODE pill: ARROWS / STICK / WHEEL
+  if (_driving && !CGRectIsEmpty(_steerToggle)) {
+    UIBezierPath* steerPath = [UIBezierPath bezierPathWithRoundedRect:_steerToggle
+                                                         cornerRadius:_steerToggle.size.height / 2];
+    [fill setFill];
+    [steerPath fill];
+    [stroke setStroke];
+    steerPath.lineWidth = 1;
+    [steerPath stroke];
+    NSString* modeLabel = _steeringMode == SteeringMode::kArrows ? @"STEER: ◀ ▶" :
+                         (_steeringMode == SteeringMode::kStick ? @"STEER: STICK" : @"STEER: WHEEL");
+    [self drawLabel:modeLabel
+                 at:CGPointMake(CGRectGetMidX(_steerToggle), CGRectGetMidY(_steerToggle))
+               size:_steerToggle.size.height * 0.38];
+  }
   if (!CGRectIsEmpty(_snap)) {
     UIBezierPath* snap = [UIBezierPath bezierPathWithRoundedRect:_snap cornerRadius:_snap.size.height / 2];
     [fill setFill];
@@ -947,6 +1062,18 @@ static CGFloat TouchOpacity() {
                        at:CGPointMake(CGRectGetMidX(a.r), CGRectGetMidY(a.r))
                      size:arm * 0.8];
         }
+        break;
+      }
+      case Kind::kSteerArrow: {
+        UIBezierPath* path = [UIBezierPath
+            bezierPathWithOvalInRect:CGRectInset(CGRectMake(c.center.x, c.center.y, 0, 0),
+                                                 -c.radius, -c.radius)];
+        [(c.pressed ? pressed : fill) setFill];
+        [path fill];
+        [stroke setStroke];
+        path.lineWidth = c.pressed ? 2.5 : 1.5;
+        [path stroke];
+        [self drawLabel:c.label at:c.center size:c.radius * 0.95];
         break;
       }
       case Kind::kRoundButton: {
@@ -1299,6 +1426,7 @@ void InstallFpsCounter() {
     return;
   }
   NFSFpsLabel* label = [[NFSFpsLabel alloc] init];
+  label.layer.zPosition = 9999.0f;
   [window addSubview:label];
   [label layoutInSuperview];
   installed = true;
@@ -1316,6 +1444,7 @@ void Install() {
     return;
   }
   NFSTouchView* view = [[NFSTouchView alloc] initWithFrame:window.bounds];
+  view.layer.zPosition = 9999.0f;
   [window addSubview:view];
   if (REXCVAR_GET(ios_touch_auto_layout)) {
     [view followGame];

@@ -255,17 +255,18 @@ void VulkanPipelineCache::NfsmwGuardarCacheVulkan() {
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
   const VkDevice device = vulkan_device->device();
   size_t tamano = 0;
-  if (dfn.vkGetPipelineCacheData(device, cache, &tamano, nullptr) != VK_SUCCESS || !tamano) {
+  if (dfn.vkGetPipelineCacheData(device, cache, &tamano, nullptr) != VK_SUCCESS || tamano < 32) {
     return;
   }
-  std::vector<uint8_t> datos(tamano);
-  // VK_INCOMPLETE si ha crecido entre las dos llamadas: lo escrito sigue siendo
-  // una cache valida, solo que sin lo ultimo.
-  const VkResult resultado = dfn.vkGetPipelineCacheData(device, cache, &tamano, datos.data());
-  if (resultado != VK_SUCCESS && resultado != VK_INCOMPLETE) {
+  // Provide safety margin for concurrent pipeline creation so MoltenVK doesn't fail header stream write
+  size_t buffer_size = tamano + 65536;
+  std::vector<uint8_t> datos(buffer_size);
+  size_t query_size = buffer_size;
+  const VkResult resultado = dfn.vkGetPipelineCacheData(device, cache, &query_size, datos.data());
+  if ((resultado != VK_SUCCESS && resultado != VK_INCOMPLETE) || query_size < 32) {
     return;
   }
-  datos.resize(tamano);
+  datos.resize(query_size);
   std::filesystem::path temporal = nfsmw_cache_vulkan_ruta_;
   temporal += ".tmp";
   FILE* f = rex::filesystem::OpenFile(temporal, "wb");

@@ -336,6 +336,11 @@ const std::vector<Section>& Sections() {
             @"auto",
             {{@"Fit this screen", @"auto"}, {@"16:9 (Xbox 360)", @"16:9"}, {@"4:3", @"4:3"},
              {@"19.5:9", @"wide"}}},
+           {@"scene_res", Type::kChoice, @"Scene resolution",
+            @"Native internal 3D scene resolution for NFS Carbon. 1080p default provides razor-sharp visuals on Apple Silicon.",
+            @"1080p",
+            {{@"720p (1560x720)", @"720p"}, {@"900p (1950x900)", @"900p"}, {@"1080p (2340x1080)", @"1080p"},
+             {@"Native Retina (2622x1206)", @"retina"}}},
            {@"scale", Type::kChoice, @"Render resolution",
             ScaleSummary(),
             @"1",
@@ -423,7 +428,7 @@ const std::vector<Section>& Sections() {
              {@"FXAA", @"fxaa"},
              {@"FXAA high", @"fxaa_high"}}},
            {@"anisotropic", Type::kChoice, @"Anisotropic filtering",
-            @"Sharper textures seen at an angle, like the road in the distance.", @"3",
+            @"Sharper textures seen at an angle, like the road in the distance.", @"5",
             {{@"Off", @"0"}, {@"2x", @"2"}, {@"4x", @"3"}, {@"16x", @"5"}}},
            {@"shadow_size", Type::kChoice, @"Shadow quality",
             @"Size of the shadow map, drawn and copied every frame. Lower: more fps where the GPU "
@@ -458,7 +463,7 @@ const std::vector<Section>& Sections() {
            {@"scaling", Type::kChoice, @"Scaling to the screen",
             @"How the game image is taken to the screen size. FSR: sharper upscaling. CAS: "
             @"sharpening only.",
-            @"bilinear",
+            @"cas",
             {{@"Bilinear", @"bilinear"}, {@"AMD FSR 1.0", @"fsr"}, {@"AMD CAS", @"cas"}}},
        }, kTabGraphics},
       {@"Touch controls", nil,
@@ -492,9 +497,9 @@ const std::vector<Section>& Sections() {
        {
            {@"audio_starve_reset", Type::kSwitch, @"Audio stream reset",
             @"When a sound stream runs out of data, drop what it had decoded but not yet played "
-            @"(Xenia Canary's fix for stale sounds in NFS). Leave it on: off, music cuts out. "
+            @"(Xenia Canary's fix for stale sounds in NFS). Leave it off: on, 200+ resets freeze car audio cursors. "
             @"Only for testing.",
-            @"true"},
+            @"false"},
        }, kTabAudio},
       {@"Performance", @"To test what each thing costs on your device. The defaults are the recommended ones.",
        {
@@ -617,6 +622,22 @@ NSMutableDictionary<NSString*, NSString*>* LoadSettings(const fs::path& docs) {
       }
     }
   }
+  // Automatic Migration for NFS Carbon v2:
+  // Force audio_starve_reset to false so existing installs don't retain stale @"true" (which killed 200+ XMA streams).
+  // Lock native_renderer and nfsmw_native_cp to false (MoltenVK Vulkan backend).
+  // Set high-res scene defaults (1080p, CAS, 16x Anisotropic).
+  if (!s[@"carbon_v2_migrated"]) {
+    s[@"audio_starve_reset"] = @"false";
+    s[@"native_renderer"] = @"false";
+    s[@"nfsmw_native_cp"] = @"false";
+    s[@"scene_res"] = @"1080p";
+    s[@"scaling"] = @"cas";
+    s[@"anisotropic"] = @"5";
+    s[@"scale"] = @"1";
+    s[@"carbon_v2_migrated"] = @"true";
+    SaveSettings(docs, s);
+  }
+
   return s;
 }
 
@@ -761,42 +782,41 @@ std::vector<std::string> Arguments(NSDictionary<NSString*, NSString*>* s) {
   a.push_back("--anisotropic_override=" + str(@"anisotropic"));
 
   // Carbon scene and single-pass
-  const bool single_pass = wide || (On(s, @"one_pass") && !msaa);
-  a.push_back("--carbon_single_pass=" + b(single_pass));
-  a.push_back("--nfsmw_una_pasada=" + b(single_pass));
-  if (wide) {
+  a.push_back("--carbon_single_pass=true");
+  a.push_back("--nfsmw_una_pasada=false");
+  NSString* scene_res = Value(s, @"scene_res") ?: @"1080p";
+  if ([scene_res isEqualToString:@"720p"]) {
     a.push_back("--carbon_scene_resolution=1560x720");
+  } else if ([scene_res isEqualToString:@"900p"]) {
+    a.push_back("--carbon_scene_resolution=1950x900");
+  } else if ([scene_res isEqualToString:@"retina"]) {
+    a.push_back("--carbon_scene_resolution=2622x1206");
   } else if ([aspect isEqualToString:@"4:3"]) {
     a.push_back("--carbon_scene_resolution=1024x768");
   } else {
-    a.push_back("--carbon_scene_resolution=1280x720");
+    // 1080p default (2340x1080)
+    a.push_back("--carbon_scene_resolution=2340x1080");
   }
 
   // GPU & Vulkan Settings
   a.push_back("--ios_async_submits=" + b(On(s, @"async_submits")));
   a.push_back(std::string("--render_target_path_vulkan=") + (On(s, @"edram_fsi") ? "fsi" : "fbo"));
-  a.push_back("--occlusion_query_enable=" + b(On(s, @"occlusion")));
+  a.push_back("--occlusion_query_enable=false");
+  a.push_back("--ios_readback_max_kb=64");
   a.push_back("--ios_invalidation_widen_kb=" + str(@"widen_kb"));
   a.push_back(std::string("--readback_resolve=") + (On(s, @"exposure") ? "fast" : "none"));
-  a.push_back("--readback_memexport=" + b(On(s, @"memexport")));
+  a.push_back("--readback_memexport=false");
   a.push_back("--clear_memory_page_state=" + b(On(s, @"pages")));
   a.push_back("--ios_iso_stream=" + b(On(s, @"iso_stream")));
   a.push_back("--ios_xma_starve_reset=" + b(On(s, @"audio_starve_reset")));
+  a.push_back("--ios_utility_qos_guest=false");
+  a.push_back("--ios_utility_qos=false");
+  a.push_back("--mnk_mode=false");
 
-  // Backend selection: Only use native if explicitly requested AND no_vulkan is on
-  const bool native_on = On(s, @"native_renderer");
-  if (native_on) {
-    a.push_back("--resolution_scale=1");
-    a.push_back("--nfsmw_native_resolution_scale=" + str(@"scale"));
-    a.push_back("--nfsmw_native_half_rate_reflections=" + b([Value(s, @"half_rate_reflections") isEqualToString:@"half"]));
-  }
-  a.push_back("--nfsmw_native_present=" + b(native_on));
-  a.push_back("--nfsmw_native_cp=" + b(native_on));
-  if (native_on && On(s, @"no_vulkan")) {
-    a.push_back("--gpu_backend=native");
-  } else {
-    a.push_back("--gpu_backend=vulkan");
-  }
+  // Backend selection: Lock Vulkan backend for NFS Carbon
+  a.push_back("--gpu_backend=vulkan");
+  a.push_back("--nfsmw_native_cp=false");
+  a.push_back("--nfsmw_native_present=false");
 
   // Logging and performance
   a.push_back(std::string("--log_level=") +

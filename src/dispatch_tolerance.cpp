@@ -62,13 +62,15 @@ void LogBootBreadcrumb(const char* message) {
   }
 }
 
-void RecordUnregisteredTarget(uint32_t address, uint32_t caller_lr) {
+thread_local uint32_t tl_last_indirect_target = 0;
+
+void RecordUnregisteredTarget(uint32_t address, uint32_t caller_lr, uint64_t tid) {
   static std::mutex mutex;
-  static std::set<uint32_t> seen;
+  static std::set<std::pair<uint32_t, uint32_t>> seen_pairs;
   std::lock_guard<std::mutex> lock(mutex);
-  if (seen.insert(address).second) {
-    REXLOG_ERROR("[dispatch] UNRESOLVED INDIRECT CALL: target=0x{:08X}, lr=0x{:08X}",
-                 address, caller_lr);
+  if (seen_pairs.insert({address, caller_lr}).second) {
+    REXLOG_ERROR("[dispatch] UNRESOLVED INDIRECT CALL: target=0x{:08X}, lr=0x{:08X}, thread=0x{:X}",
+                 address, caller_lr, tid);
     rex::FlushLogging();
     if (auto logger = spdlog::default_logger()) {
       logger->flush();
@@ -80,15 +82,27 @@ void RecordUnregisteredTarget(uint32_t address, uint32_t caller_lr) {
       log_path = docs / "logs" / "unregistered_targets.txt";
     }
     if (std::FILE* f = std::fopen(log_path.string().c_str(), "a")) {
-      std::fprintf(f, "0x%08X (caller lr=0x%08X)\n", address, caller_lr);
+      std::fprintf(f, "0x%08X (caller lr=0x%08X, thread=0x%llX)\n",
+                   address, caller_lr, static_cast<unsigned long long>(tid));
       std::fclose(f);
     }
   }
 }
 
 void NoopTrap(PPCContext& ctx, uint8_t* /*base*/) {
-  RecordUnregisteredTarget(static_cast<uint32_t>(ctx.last_indirect_target),
-                           static_cast<uint32_t>(ctx.lr));
+  const uint32_t target = ctx.last_indirect_target ? static_cast<uint32_t>(ctx.last_indirect_target)
+                                                   : tl_last_indirect_target;
+  const uint32_t caller_lr = static_cast<uint32_t>(ctx.lr);
+  uint64_t tid = 0;
+#if defined(__APPLE__)
+  pthread_threadid_np(nullptr, &tid);
+#elif defined(_WIN32)
+  tid = static_cast<uint64_t>(GetCurrentThreadId());
+#else
+  tid = static_cast<uint64_t>(pthread_self());
+#endif
+
+  RecordUnregisteredTarget(target, caller_lr, tid);
   ctx.r3.u64 = 0;
 }
 
@@ -411,7 +425,7 @@ namespace rex::runtime {
       }
     }
   }
-  RecordUnregisteredTarget(guest_address, 0);
+  tl_last_indirect_target = guest_address;
   return &NoopTrap;
 }
 

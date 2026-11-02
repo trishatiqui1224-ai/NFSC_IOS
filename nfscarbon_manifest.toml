@@ -13,11 +13,13 @@ includes = []
 
 [entrypoint.functions]
 0x823217D0 = {}  # USA direct branch entrypoint (0x823217D0..0x82321850)
+0x824DA968 = {}  # USA Frontend init callback (0x824DA968)
 0x824E98B0 = {}  # Carbon USA main() (0x824E98B0..0x824E9948)
 0x824FFBE0 = {}  # USA renderer constructor helper (0x824FFBE0..0x82500228)
 0x82500298 = {}  # USA render output size hook (leaf function)
 0x8250B200 = {}  # USA render mode select hook (0x8250B200..0x8250B348)
 0x825B36E8 = {}
+0x825BF728 = {}  # USA Car Selection / Quick Race callback (0x825BF728)
 0x825C8DD8 = {}
 0x825CE608 = {}
 0x826E0088 = {}  # USA D3D ring wait watchdog (leaf thunk)

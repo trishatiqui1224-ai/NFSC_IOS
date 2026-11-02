@@ -60,6 +60,8 @@ REQUIRED_USA_SYMBOLS = [
     (0x823217D0, "sub_823217D0", "USA direct branch entrypoint (0x823217D0..0x82321850)"),
     (0x82A63408, "sub_82A63408", "USA direct branch entrypoint (0x82A63408..0x82A63574)"),
     (0x82A66790, "sub_82A66790", "USA direct branch entrypoint (0x82A66790..0x82A668D8)"),
+    (0x824DA968, "sub_824DA968", "USA Frontend init callback (0x824DA968)"),
+    (0x825BF728, "sub_825BF728", "USA Car Selection / Quick Race callback (0x825BF728)"),
 ]
 
 # Forbidden PAL-only symbols that must NEVER appear as function starts
@@ -117,6 +119,96 @@ def load_pdata_functions(xex_path: pathlib.Path) -> list[tuple[int, int]]:
     _, pdata = load_xex_image(str(xex_path))
     print(f"[build_usa_codegen] Loaded {len(pdata):,} ground-truth .pdata functions.")
     return pdata
+
+
+def scan_code_referenced_functions(xex_path: pathlib.Path, pdata: list[tuple[int, int]]) -> list[int]:
+    """Scans USA default.xex PE image for:
+    1. lis + addi/ori address formation pairs resolving to code addresses in [0x82110000, 0x82B35C64).
+    2. Filters candidates: 4-byte aligned, outside .pdata function interiors, and preceded by a
+       control transfer barrier (b, blr, bctr, nop/zero padding) or having a function prologue (mflr r0, stwu r1).
+    """
+    import struct
+    from xex_image import load_xex_image, secciones
+
+    base = 0x82000000
+    img, _ = load_xex_image(str(xex_path))
+    secs = secciones(img)
+
+    code_ranges = [(s, e) for name, s, e in secs if name in ['.text', '.embsec_']]
+    candidates = set()
+
+    for c_start, c_end in code_ranges:
+        for pc in range(c_start, c_end - 4, 4):
+            inst = struct.unpack_from('>I', img, pc - base)[0]
+            op = inst >> 26
+            if op == 15:  # lis rD, simm
+                rd = (inst >> 21) & 0x1F
+                simm = inst & 0xFFFF
+                high_val = (simm << 16)
+                for step in range(1, 9):
+                    look_pc = pc + step * 4
+                    if look_pc >= c_end:
+                        break
+                    look_inst = struct.unpack_from('>I', img, look_pc - base)[0]
+                    look_op = look_inst >> 26
+                    if look_op in [16, 18]:
+                        if look_op == 18 and (look_inst & 1) == 0:
+                            break
+                    if look_op == 19 and (look_inst & 0x7FE) in [32, 1056]:
+                        break
+
+                    if look_op == 14:  # addi rD, rA, simm
+                        look_ra = (look_inst >> 16) & 0x1F
+                        if look_ra == rd:
+                            look_simm = look_inst & 0xFFFF
+                            if look_simm >= 0x8000:
+                                look_simm -= 0x10000
+                            addr = (high_val + look_simm) & 0xFFFFFFFF
+                            if 0x82110000 <= addr < 0x82B35C64 and (addr % 4) == 0:
+                                candidates.add(addr)
+                            look_rd = (look_inst >> 21) & 0x1F
+                            if look_rd == rd:
+                                break
+                    elif look_op == 24:  # ori rA, rS, uimm
+                        look_rs = (look_inst >> 21) & 0x1F
+                        if look_rs == rd:
+                            uimm = look_inst & 0xFFFF
+                            addr = (high_val | uimm) & 0xFFFFFFFF
+                            if 0x82110000 <= addr < 0x82B35C64 and (addr % 4) == 0:
+                                candidates.add(addr)
+                            look_ra = (look_inst >> 16) & 0x1F
+                            if look_ra == rd:
+                                break
+
+    # Filter out any candidate that strictly splits an existing .pdata function range
+    valid = []
+    for c in sorted(candidates):
+        if any(s < c < e for s, e in pdata):
+            continue  # strictly inside [start, end)
+        if any(s == c for s, _ in pdata):
+            continue  # already known in .pdata
+
+        offset = c - base
+        if offset < 4 or offset >= len(img) - 8:
+            continue
+        prev_inst = struct.unpack_from('>I', img, offset - 4)[0]
+        inst0 = struct.unpack_from('>I', img, offset)[0]
+
+        is_prev_barrier = (
+            (prev_inst & 0xFC000003) == 0x48000000 or
+            prev_inst == 0x4E800020 or
+            (prev_inst & 0xFC0007FE) == 0x4C000420 or
+            prev_inst in [0x00000000, 0x60000000]
+        )
+        is_prologue = (
+            inst0 == 0x7C0802A6 or
+            (inst0 & 0xFFFF0000) == 0x94210000
+        )
+        if is_prev_barrier or is_prologue:
+            valid.append(c)
+
+    print(f"[build_usa_codegen] lis+addi/ori scan discovered {len(valid)} candidate non-pdata leaf functions.")
+    return valid
 
 
 def parse_manifest_functions(manifest_path: pathlib.Path) -> list[int]:
@@ -183,7 +275,7 @@ def clean_manifest(manifest_path: pathlib.Path, pdata: list[tuple[int, int]],
         "",
         "[project]",
         'name = "nfscarbon"',
-        'sdk_version = "0.10.0"',
+        'sdk_version = "1.0.0"',
         'game_root = "game"',
         "",
         "[entrypoint]",
@@ -239,10 +331,10 @@ def run_codegen(rexglue_bin: pathlib.Path, manifest_path: pathlib.Path, cwd: pat
 
 def resolver_loop(rexglue_bin: pathlib.Path, manifest_path: pathlib.Path,
                   gen_dir: pathlib.Path, pdata: list[tuple[int, int]],
-                  cwd: pathlib.Path, max_passes: int = 3):
+                  cwd: pathlib.Path, initial_add: list[int] = None, max_passes: int = 3):
     """Iteratively runs codegen, scans for unresolved branches, and resolves them."""
     remove_set = set()
-    add_set = []
+    add_set = list(initial_add) if initial_add else []
 
     for pass_num in range(1, max_passes + 1):
         print(f"\n============================================================")
@@ -356,17 +448,21 @@ def main():
     # 2. Extract .pdata functions from USA XEX
     pdata = load_pdata_functions(staged_xex)
 
-    # 3. Execute Resolver Loop (Sanitize Manifest -> Codegen -> Scan -> Resolve -> Loop)
+    # 3. Discover unmapped code-referenced callbacks
+    discovered = scan_code_referenced_functions(staged_xex, pdata)
+
+    # 4. Execute Resolver Loop (Sanitize Manifest -> Codegen -> Scan -> Resolve -> Loop)
     resolver_loop(
         rexglue_bin=rexglue_bin,
         manifest_path=manifest_path,
         gen_dir=gen_dir,
         pdata=pdata,
         cwd=REPO_ROOT,
+        initial_add=discovered,
         max_passes=args.passes
     )
 
-    # 4. Final verification of register.cpp
+    # 5. Final verification of register.cpp
     verify_register(gen_dir)
     print("\n[build_usa_codegen] PIPELINE COMPLETED SUCCESSFULLY.")
 

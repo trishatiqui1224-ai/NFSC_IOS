@@ -39,10 +39,77 @@
 
 #include "lifecycle.h"
 
+#include <mach/mach.h>
+#include <mach/thread_act.h>
+#include <mach/thread_info.h>
+#include <pthread.h>
+#include <chrono>
+#include <thread>
+#include <atomic>
+#include <spdlog/spdlog.h>
+
 namespace nfsmw::lifecycle {
 namespace {
 
 std::function<void()> g_pause, g_resume;
+
+std::atomic<bool> g_guest_booted{false};
+std::atomic<std::chrono::steady_clock::time_point> g_last_present_time{std::chrono::steady_clock::now()};
+
+void StartStallWatchdog() {
+  static std::atomic<bool> started{false};
+  if (started.exchange(true)) return;
+
+  std::thread([]() {
+    pthread_setname_np("GPUStallWatchdog");
+    while (true) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      if (!g_guest_booted.load(std::memory_order_relaxed)) {
+        continue;
+      }
+      if (g_paused) {
+        continue;
+      }
+      const auto now = std::chrono::steady_clock::now();
+      const auto last = g_last_present_time.load(std::memory_order_acquire);
+      if (std::chrono::duration_cast<std::chrono::seconds>(now - last).count() >= 5) {
+        static auto last_warn = std::chrono::steady_clock::time_point{};
+        if (now - last_warn < std::chrono::seconds(5)) continue;
+        last_warn = now;
+
+        REXLOG_ERROR("[stall-watchdog] STALL DETECTED: 0 frames presented for >= 5s! Dumping active threads:");
+
+        thread_act_array_t threads = nullptr;
+        mach_msg_type_number_t count = 0;
+        if (task_threads(mach_task_self(), &threads, &count) == KERN_SUCCESS) {
+          for (mach_msg_type_number_t i = 0; i < count; ++i) {
+            pthread_t thread = pthread_from_mach_thread_np(threads[i]);
+            char name[64] = {};
+            thread_identifier_info_data_t id = {};
+            thread_basic_info_data_t basic = {};
+            mach_msg_type_number_t n = THREAD_IDENTIFIER_INFO_COUNT, b = THREAD_BASIC_INFO_COUNT;
+
+            if (thread && pthread_getname_np(thread, name, sizeof(name)) == 0 &&
+                thread_info(threads[i], THREAD_IDENTIFIER_INFO, thread_info_t(&id), &n) == KERN_SUCCESS &&
+                thread_info(threads[i], THREAD_BASIC_INFO, thread_info_t(&basic), &b) == KERN_SUCCESS) {
+              const uint64_t cpu_us = uint64_t(basic.user_time.seconds + basic.system_time.seconds) * 1000000 +
+                                      basic.user_time.microseconds + basic.system_time.microseconds;
+              REXLOG_ERROR("  [stall-thread] id=0x{:X} name='{}' run_state={} cpu_time={}us",
+                           id.thread_id, name, basic.run_state, cpu_us);
+            }
+            mach_port_deallocate(mach_task_self(), threads[i]);
+          }
+          vm_deallocate(mach_task_self(), vm_address_t(threads), count * sizeof(thread_act_t));
+        }
+        rex::FlushLogging();
+        if (auto logger = spdlog::default_logger()) {
+          logger->flush();
+        }
+      }
+    }
+  }).detach();
+}
+
 bool g_paused = false;  // main thread only
 
 void Pause(const char* why) {
@@ -87,6 +154,7 @@ void Install(std::function<void()> pause, std::function<void()> resume) {
   // still paused.
   on(UIApplicationDidBecomeActiveNotification, Resume, "app active");
   on(UISceneDidActivateNotification, Resume, "scene active");
+  StartStallWatchdog();
 }
 
 namespace {
@@ -147,6 +215,8 @@ void KeepMetalViewWindowSized() {
 }  // namespace
 
 void OnDisplayTick() {
+  g_guest_booted.store(true, std::memory_order_relaxed);
+  g_last_present_time.store(std::chrono::steady_clock::now(), std::memory_order_release);
   KeepMetalViewWindowSized();
   if (g_paused && UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
     Resume("display refresh");
