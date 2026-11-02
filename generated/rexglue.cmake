@@ -14,7 +14,7 @@ else()
     if(REXSDK_VERSION)
         find_package(rexglue ${REXSDK_VERSION} EXACT QUIET CONFIG)
     else()
-        find_package(rexglue 0.10.0 QUIET CONFIG)
+        find_package(rexglue 1.0.0 QUIET CONFIG)
     endif()
     if(NOT rexglue_FOUND)
         message(FATAL_ERROR
@@ -88,12 +88,16 @@ macro(rexglue_setup_target target_name)
         rexglue_apply_target_settings(${target_name}_recomp)
         rexglue_apply_recomp_settings(${target_name}_recomp
             "${REXGLUE_ENTRYPOINT_INCLUDE_DIR}/nfscarbon_pch.h")
-        add_dependencies(${target_name}_recomp nfscarbon_codegen)
+        if(TARGET nfscarbon_codegen)
+            add_dependencies(${target_name}_recomp nfscarbon_codegen)
+        endif()
         target_link_libraries(${target_name} PRIVATE
             ${target_name}_recomp)
     endif()
     # Also on the host, so a tree that has never run codegen still generates it.
-    add_dependencies(${target_name} nfscarbon_codegen)
+    if(TARGET nfscarbon_codegen)
+        add_dependencies(${target_name} nfscarbon_codegen)
+    endif()
     target_include_directories(${target_name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -114,6 +118,11 @@ endmacro()
 # codegen, including one a project assembles itself rather than taking the
 # library rexglue_setup_target() builds. The stamp comes first: the DEPFILE
 # names it.
+#
+# A cross build (Nintendo Switch) has no rexglue it could run: the tool is a
+# host program. There the generated sources must already exist, produced by
+# running codegen with a host SDK.
+if(TARGET rex::rexglue)
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/codegen.build.stamp"
            ${REXGLUE_ENTRYPOINT_GENERATED_SOURCES}
@@ -125,6 +134,11 @@ add_custom_command(
 )
 add_custom_target(nfscarbon_codegen
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/codegen.build.stamp")
+elseif(NOT REXGLUE_ENTRYPOINT_GENERATED_SOURCES)
+    message(FATAL_ERROR
+        "No generated sources in generated/default and no rexglue to produce them "
+        "(cross build). Run 'rexglue codegen nfscarbon_manifest.toml' with a host SDK first.")
+endif()
 
 # Include DLL module shared library targets if codegen has generated them
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/dll_targets.cmake")

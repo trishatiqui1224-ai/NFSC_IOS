@@ -13,9 +13,9 @@ PAL-generated code against a USA ISO mapping, which causes:
   - Guest crash at <57 ms
 
 Checked addresses (USA XEX, NFS Carbon Title ID 454107EC):
-  0x829446E0  -- XEX entry point (IS the real entry in USA, not a blr stub!)
-  0x82944510  -- xstart() CRT entry
-  0x824E9780  -- Carbon main()
+  0x829446E0  -- XEX entry point (USA genuine xstart)
+  0x82944510  -- USA display/privilege check function
+  0x824E98B0  -- Carbon USA main() (genuine USA address)
   0x823217D0  -- USA direct branch target (sub_823217D0)
   0x82A63408  -- USA direct branch target (sub_82A63408)
   0x82A66790  -- USA direct branch target (sub_82A66790)
@@ -44,19 +44,26 @@ def find_register_cpp() -> pathlib.Path | None:
 
 # Functions that MUST appear in the USA-generated nfsc_register.cpp.
 REQUIRED_USA_SYMBOLS = [
-    ("0x829446E0", "sub_829446E0", "XEX entry point (USA genuine, not PAL blr stub)"),
-    ("0x82944510", "xstart",       "CRT entry point xstart"),
-    ("0x824E9780", "sub_824E9780", "Carbon main()"),
+    ("0x829446E0", "sub_829446E0", "XEX entry point (USA genuine xstart)"),
+    ("0x82944510", "sub_82944510", "USA display/privilege check function"),
+    ("0x824E98B0", "sub_824E98B0", "Carbon USA main() (genuine USA address)"),
+    ("0x824FFBE0", "sub_824FFBE0", "USA renderer constructor helper"),
+    ("0x82500298", "sub_82500298", "USA render output size hook"),
+    ("0x8250B200", "sub_8250B200", "USA render mode select hook"),
+    ("0x826E0088", "sub_826E0088", "USA D3D ring wait watchdog"),
     ("0x823217D0", "sub_823217D0", "USA direct branch entrypoint (0x823217D0)"),
     ("0x82A63408", "sub_82A63408", "USA direct branch entrypoint (0x82A63408)"),
     ("0x82A66790", "sub_82A66790", "USA direct branch entrypoint (0x82A66790)"),
 ]
 
-# PAL-only addresses that must NOT appear (if they do, codegen was run on PAL XEX).
+# PAL-only addresses that must NOT appear (if they do, codegen was run on PAL XEX or has PAL splits).
 FORBIDDEN_PAL_ONLY_SYMBOLS: list[tuple[str, str]] = [
-    # Example: PAL xstart was at 0x82944510 in PAL but we'd expect PAL-shifted values;
-    # currently we don't have PAL function names to blacklist, so this list is intentionally empty.
-    # Add entries here if we identify PAL-specific signatures.
+    ("0x824E9780", "PAL main() - slices USA function 0x824E9720..0x824E9888"),
+    ("0x824FFAB0", "PAL renderer constructor - slices USA function 0x824FF858..0x824FFAD4"),
+    ("0x82500168", "PAL renderer size - slices USA function 0x824FFBE0..0x82500228"),
+    ("0x8250B0D0", "PAL renderer select - slices USA function 0x8250B028..0x8250B174"),
+    ("0x822A9490", "PAL story entry - slices USA function 0x822A9410..0x822A94D0"),
+    ("0x82641480", "PAL adjustor thunk - slices USA function 0x82641240..0x826414AC"),
 ]
 
 

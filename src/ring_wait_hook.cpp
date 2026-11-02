@@ -14,9 +14,12 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <dlfcn.h>
 #include <thread>
 #include <algorithm>
+
+#if !defined(_WIN32)
+#include <dlfcn.h>
+#endif
 
 #if defined(__APPLE__)
 #include <os/os_sync_wait_on_address.h>
@@ -56,6 +59,7 @@ std::atomic<uint32_t>* RptrSequence() {
     if (off && std::strcmp(off, "0") == 0) {
       return nullptr;
     }
+#if !defined(_WIN32)
     for (const char* name : {"@rpath/librexgpu-carbon.dylib", "@rpath/librexgpu-xenos.dylib",
                              "librexgpu-carbon.so", "librexgpu-xenos.so"}) {
       if (void* plugin = dlopen(name, RTLD_NOW | RTLD_NOLOAD)) {
@@ -64,6 +68,7 @@ std::atomic<uint32_t>* RptrSequence() {
         }
       }
     }
+#endif
     return nullptr;
   }();
   return sequence;
