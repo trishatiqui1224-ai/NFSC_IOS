@@ -4028,7 +4028,6 @@ id<MTLSamplerState> SamplerFor(id<MTLDevice> device, bool linear, uint32_t clamp
     sd.tAddressMode = volume_or_cube ? MTLSamplerAddressModeClampToEdge : AddressMode(clamp_y);
     sd.rAddressMode = MTLSamplerAddressModeClampToEdge;
     sd.maxAnisotropy = max_anisotropy;
-    if (@available(iOS 26.0, *)) sd.lodBias = float(bias) / 8.0f;
     sd.supportArgumentBuffers = YES;
     s = [device newSamplerStateWithDescriptor:sd];
   }
