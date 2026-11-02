@@ -20,7 +20,7 @@ permissions:
 jobs:
   build-ios:
     name: Build NFS Carbon iOS (ARM64)
-    runs-on: macos-latest
+    runs-on: macos-14
 
     steps:
       - name: Checkout Repository
@@ -28,6 +28,20 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 1
+
+      - name: Select Xcode 16 for C++23 Support
+        run: |
+          XCODE_16=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "${XCODE_16}" ]; then
+            echo "[CI] Selecting Xcode 16 at ${XCODE_16}..."
+            sudo xcode-select -s "${XCODE_16}"
+          else
+            echo "[CI] Xcode 16 not found by glob, checking available Xcode apps:"
+            ls -d /Applications/Xcode*.app || true
+          fi
+          echo "[CI] Active Xcode version:"
+          xcodebuild -version
+          xcrun --sdk iphoneos --find clang
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
