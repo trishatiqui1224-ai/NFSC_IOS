@@ -53,6 +53,7 @@ namespace {
 
 std::function<void()> g_pause, g_resume;
 
+std::atomic<bool> g_paused{false};
 std::atomic<bool> g_guest_booted{false};
 std::atomic<std::chrono::steady_clock::time_point> g_last_present_time{std::chrono::steady_clock::now()};
 
@@ -67,7 +68,7 @@ void StartStallWatchdog() {
       if (!g_guest_booted.load(std::memory_order_relaxed)) {
         continue;
       }
-      if (g_paused) {
+      if (g_paused.load(std::memory_order_relaxed)) {
         continue;
       }
       const auto now = std::chrono::steady_clock::now();
@@ -110,22 +111,20 @@ void StartStallWatchdog() {
   }).detach();
 }
 
-bool g_paused = false;  // main thread only
-
 void Pause(const char* why) {
-  if (g_paused || !g_pause) {
+  if (g_paused.load(std::memory_order_relaxed) || !g_pause) {
     return;
   }
-  g_paused = true;
+  g_paused.store(true, std::memory_order_relaxed);
   REXLOG_INFO("[ios] to the background ({}): pausing the GPU emulation", why);
   g_pause();
 }
 
 void Resume(const char* why) {
-  if (!g_paused || !g_resume) {
+  if (!g_paused.load(std::memory_order_relaxed) || !g_resume) {
     return;
   }
-  g_paused = false;
+  g_paused.store(false, std::memory_order_relaxed);
   REXLOG_INFO("[ios] back on screen ({}): resuming the GPU emulation", why);
   g_resume();
 }
@@ -218,7 +217,7 @@ void OnDisplayTick() {
   g_guest_booted.store(true, std::memory_order_relaxed);
   g_last_present_time.store(std::chrono::steady_clock::now(), std::memory_order_release);
   KeepMetalViewWindowSized();
-  if (g_paused && UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
+  if (g_paused.load(std::memory_order_relaxed) && UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
     Resume("display refresh");
   }
 }
