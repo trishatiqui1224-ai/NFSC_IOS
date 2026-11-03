@@ -162,9 +162,9 @@ struct Control {
 
   bool Contains(CGPoint p) const {
     if (kind == Kind::kRectButton || kind == Kind::kTrigger) {
-      // A little slack around the rectangle, easier to hit with a thumb.
-      return std::fabs(p.x - center.x) <= size.width * 0.5 + 8 &&
-             std::fabs(p.y - center.y) <= size.height * 0.5 + 8;
+      // Generous slack around the rectangle, easier to hit with a thumb while racing.
+      return std::fabs(p.x - center.x) <= size.width * 0.5 + 12 &&
+             std::fabs(p.y - center.y) <= size.height * 0.5 + 12;
     }
     if (kind == Kind::kSteerArrow) {
       // Generous ergonomic hit box for arrow buttons and slide-to-steer rocker

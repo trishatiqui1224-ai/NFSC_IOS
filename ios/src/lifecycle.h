@@ -14,4 +14,14 @@ void Install(std::function<void()> pause, std::function<void()> resume);
 // emulation is still paused, a missed "back to the foreground" is made up for.
 void OnDisplayTick();
 
+// Synchronizes the CAMetalLayer drawableSize & contentsScale with the active
+// display preset (720p, 900p, 1080p, retina).
+void KeepMetalViewWindowSized();
+
 }  // namespace nfsmw::lifecycle
+
+extern "C" {
+uint32_t GetMetalLayerDrawableWidth();
+uint32_t GetMetalLayerDrawableHeight();
+void ApplyMetalLayerPreset(void* raw_layer);
+}

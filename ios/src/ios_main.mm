@@ -49,6 +49,7 @@
 #include "battery.h"
 #include "boot_trace.h"
 #include "launcher.h"
+#include "lifecycle.h"
 #include "memory_report.h"
 #include "probe.h"
 
@@ -212,6 +213,8 @@ std::vector<std::string> GameArguments(const fs::path& docs, const fs::path& iso
       "--resolution=1560x720",
       "--carbon_scene_resolution=1560x720",
       "--ios_display_preset=1080p",
+      "--mnk_mode=false",
+      "--mnk_mouse=false",
       // The Xbox 360 language and country of the game's edition (USA).
       std::string("--user_language=") + NFSCARBON_GAME_LANGUAGE,
       std::string("--user_country=") + NFSCARBON_GAME_COUNTRY,
@@ -405,6 +408,9 @@ int RunGame(int argc, char* argv[], const fs::path& docs) {
   boot::Trace(initialized ? "game: OnInitialize done, entering the main loop"
                           : "game: OnInitialize FAILED (reason in nfscarbon.log)");
   REXLOG_INFO("[ios] entering main message loop...");
+  if (initialized) {
+    nfsmw::lifecycle::KeepMetalViewWindowSized();
+  }
   rex::FlushLogging();
   if (auto logger = spdlog::default_logger()) {
     logger->flush();
@@ -557,6 +563,18 @@ int main(int argc, char* argv[]) {
     SetArgument(texts, "--ios_xma_starve_reset=false");
     SetArgument(texts, "--ios_utility_qos_guest=false");
     SetArgument(texts, "--ios_utility_qos=false");
+    // Default mnk_mode / mnk_mouse to false on iOS unless explicitly set to true in launcher settings
+    bool user_enabled_keyboard = false;
+    for (const auto& a : nfsmw::launcher::SettingsArguments(docs)) {
+      if (a == "--mnk_mode=true") {
+        user_enabled_keyboard = true;
+        break;
+      }
+    }
+    if (!user_enabled_keyboard) {
+      SetArgument(texts, "--mnk_mode=false");
+      SetArgument(texts, "--mnk_mouse=false");
+    }
     // Enforce EDRAM-safe guest scene resolution (max 1560x720 / 900 tiles)
     for (auto& t : texts) {
       if (OptionName(t) == "--carbon_scene_resolution" || OptionName(t) == "--resolution") {

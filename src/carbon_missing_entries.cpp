@@ -412,4 +412,17 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
   RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A66580>>(dispatcher, 0x82A66BD8);
   RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A66820>>(dispatcher, 0x82A66BE8);
   RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A66660>>(dispatcher, 0x82A66C00);
+
+  size_t total_registered = 0;
+  for (uint32_t addr = PPCImageConfig.code_base;
+       addr < PPCImageConfig.code_base + PPCImageConfig.code_size; addr += 4) {
+    if (dispatcher->GetFunction(addr)) {
+      ++total_registered;
+    }
+  }
+  REXLOG_INFO("[carbon] Total compiled functions and entry points registered in dispatcher: {}",
+              total_registered);
+  if (auto logger = spdlog::default_logger()) {
+    logger->flush();
+  }
 }

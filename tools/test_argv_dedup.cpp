@@ -211,6 +211,20 @@ int main() {
               << experiment_args.size() << " unique flags)." << std::endl;
   }
 
+  // Test 3: Last-occurrence wins deduplication & mnk_mode=false override
+  {
+    std::vector<std::string> args{"nfscarbon", "--mnk_mode=true", "--ios_display_preset=1080p"};
+    SetArgument(args, "--mnk_mode=false");
+    SetArgument(args, "--ios_display_preset=720p");
+
+    assert(args.size() == 3);
+    assert(args[0] == "nfscarbon");
+    assert(args[1] == "--mnk_mode=false");
+    assert(args[2] == "--ios_display_preset=720p");
+
+    std::cout << "[test_argv_dedup] Test 3 (Last-wins deduplication for mnk_mode & presets) PASSED." << std::endl;
+  }
+
   std::cout << "[test_argv_dedup] ALL TESTS PASSED." << std::endl;
   return 0;
 }

@@ -486,7 +486,7 @@ const std::vector<Section>& Sections() {
            {@"keyboard", Type::kSwitch, @"Keyboard controls",
             @"Play with a hardware keyboard (Magic Keyboard, Bluetooth or USB): its keys act as "
             @"the controller, together with the touch controls and any gamepad.",
-            @"true"},
+            @"false"},
            {@"keyboard_bindings", Type::kLink, @"Customize keyboard controls",
             @"Which key does what. PC-style by default: arrows or WASD to drive, Space handbrake, "
             @"Alt nitrous, Shift and Ctrl to change gear, Return to accept, Backspace to go back, "
@@ -643,6 +643,12 @@ NSMutableDictionary<NSString*, NSString*>* LoadSettings(const fs::path& docs) {
   if (!s[@"nfsc_settings_v3"]) {
     s[@"audio_starve_reset"] = @"false";
     s[@"nfsc_settings_v3"] = @"true";
+    SaveSettings(docs, s);
+  }
+  // Ensure keyboard mode defaults to false on iOS unless explicitly enabled
+  if (!s[@"nfsc_keyboard_migrated"]) {
+    s[@"keyboard"] = @"false";
+    s[@"nfsc_keyboard_migrated"] = @"true";
     SaveSettings(docs, s);
   }
 

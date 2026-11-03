@@ -56,6 +56,7 @@ IOS_PATCHES = [
     "patch_ios_ui_tick",
     "patch_ios_aspect",
     "patch_ios_retina",
+    "patch_ios_preset_layer",
     "patch_ios_qos",
     "patch_ios_fault_log",
     "patch_ios_save_log",
@@ -84,6 +85,7 @@ IOS_PATCHES = [
     "patch_ios_async_copies",
     "patch_ios_type0_ranges",
     "patch_ios_resolve_stats",
+    "patch_ios_resolve_warning",
     "patch_ios_iso_stream",
     "patch_ios_native_only",
     "patch_ios_semaphore_trace",
@@ -202,6 +204,84 @@ def safeguard_fpscr(sdk):
             if txt != orig:
                 sub.write_text(txt, encoding="utf-8")
                 print(f"  [ok] Safeguarded {sub.relative_to(sdk)} (msr fpcr uint64_t operand)")
+
+
+def safeguard_resolve_warning(sdk):
+    """Silence per-frame 'Incorrect resolve sample selected' warning spam (saves 12.8ms GPU thread overhead)."""
+    p = sdk / "src" / "graphics" / "util" / "draw.cpp"
+    if p.exists():
+        txt = p.read_text(encoding="utf-8")
+        if "Incorrect resolve sample selected" in txt and "static bool logged_once" not in txt:
+            old = '''  if (rb_copy_control.copy_sample_select != sample_select) {
+    REXGPU_WARN(
+        "Incorrect resolve sample selected for {}-sample {}: {}, treating like "
+        "{}",
+        1 << uint32_t(rb_surface_info.msaa_samples), is_depth ? "depth" : "color",
+        static_cast<uint32_t>(rb_copy_control.copy_sample_select),
+        static_cast<uint32_t>(sample_select));
+  }'''
+            new = '''  if (rb_copy_control.copy_sample_select != sample_select) {
+    // LOCAL PATCH - iOS: silence 360 lines/sec per-frame warning spam (saves 12.8ms GPU thread overhead)
+    static bool logged_once = false;
+    if (!logged_once) {
+      logged_once = true;
+      REXGPU_DEBUG(
+          "Incorrect resolve sample selected for {}-sample {}: {}, treating like "
+          "{}",
+          1 << uint32_t(rb_surface_info.msaa_samples), is_depth ? "depth" : "color",
+          static_cast<uint32_t>(rb_copy_control.copy_sample_select),
+          static_cast<uint32_t>(sample_select));
+    }
+  }'''
+            if old in txt:
+                txt = txt.replace(old, new)
+                p.write_text(txt, encoding="utf-8")
+                print("  [ok] Safeguarded draw.cpp (silenced resolve sample warning spam)")
+
+
+def safeguard_preset_layer(sdk):
+    """Ensure CAMetalLayer drawableSize & contentsScale match preset before swapchain creation."""
+    p = sdk / "src" / "ui" / "window_sdl.cpp"
+    if p.exists():
+        txt = p.read_text(encoding="utf-8")
+        if "ApplyMetalLayerPreset" not in txt:
+            old_layer = '''#elif REX_PLATFORM_MAC
+  if (allowed_types & Surface::kTypeFlag_CAMetalLayer) {
+    SDL_MetalView metal_view = SDL_Metal_CreateView(sdl_window_);
+    if (metal_view) {
+      void* layer = SDL_Metal_GetLayer(metal_view);
+      if (layer) {
+        return std::make_unique<CAMetalLayerSurface>(sdl_window_, metal_view, layer);
+      }
+      SDL_Metal_DestroyView(metal_view);
+    }
+  }'''
+            new_layer = '''#elif REX_PLATFORM_MAC
+  if (allowed_types & Surface::kTypeFlag_CAMetalLayer) {
+    SDL_MetalView metal_view = SDL_Metal_CreateView(sdl_window_);
+    if (metal_view) {
+      void* layer = SDL_Metal_GetLayer(metal_view);
+      if (layer) {
+#if REX_PLATFORM_IOS
+        extern void ApplyMetalLayerPreset(void* layer);
+        extern uint32_t GetMetalLayerDrawableWidth();
+        extern uint32_t GetMetalLayerDrawableHeight();
+        ApplyMetalLayerPreset(layer);
+        if (uint32_t dw = GetMetalLayerDrawableWidth()) {
+          uint32_t dh = GetMetalLayerDrawableHeight();
+          WindowDestructionReceiver destruction_receiver(this);
+          OnActualSizeUpdate(dw, dh, destruction_receiver);
+        }
+#endif
+        return std::make_unique<CAMetalLayerSurface>(sdl_window_, metal_view, layer);
+      }
+      SDL_Metal_DestroyView(metal_view);
+    }
+  }'''
+            if old_layer in txt:
+                txt = txt.replace(old_layer, new_layer)
+                p.write_text(txt, encoding="utf-8")
+                print("  [ok] Safeguarded window_sdl.cpp (CAMetalLayer preset scaling)")
 
 
 def moltenvk(sdk):
@@ -331,6 +411,8 @@ def main():
     safeguard_vulkan_loader(sdk)
     safeguard_rex_version(sdk)
     safeguard_fpscr(sdk)
+    safeguard_resolve_warning(sdk)
+    safeguard_preset_layer(sdk)
     ensure_git_tags(sdk)
 
     print(f"\n[ok] SDK ready in {sdk}")

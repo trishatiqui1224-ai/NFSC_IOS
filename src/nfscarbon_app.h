@@ -114,8 +114,13 @@ class NfsCarbonApp : public rex::ReXApp {
       }
     };
     set_default("input_backend", "sdl");
+#if defined(__APPLE__)
+    set_default("mnk_mode", "false");
+    set_default("mnk_mouse", "false");
+#else
     set_default("mnk_mode", "true");
     set_default("mnk_mouse", "true");
+#endif
     set_default("mnk_sensitivity", "1.5");
     set_default("keybind_a", "Space");       // Handbrake
     set_default("keybind_b", "F");           // Nitrous
