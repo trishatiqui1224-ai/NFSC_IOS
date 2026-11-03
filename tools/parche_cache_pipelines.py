@@ -183,7 +183,11 @@ uint64_t NfsmwAhoraMs() {
 
 void VulkanPipelineCache::NfsmwCargarCacheVulkan(const std::filesystem::path& carpeta,
                                                  uint32_t title_id, bool fsi) {
+  std::lock_guard<std::mutex> lock(nfsmw_cache_vulkan_guardar_);
   const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
+  if (!vulkan_device) {
+    return;
+  }
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
   const VkDevice device = vulkan_device->device();
   const auto& propiedades = vulkan_device->properties();
@@ -198,15 +202,19 @@ void VulkanPipelineCache::NfsmwCargarCacheVulkan(const std::filesystem::path& ca
     return;
   }
   std::vector<uint8_t> datos;
+  bool archivo_corrupto = false;
   if (FILE* f = rex::filesystem::OpenFile(nfsmw_cache_vulkan_ruta_, "rb")) {
     fseek(f, 0, SEEK_END);
     const long tamano = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (tamano > 0 && tamano < (long(256) << 20)) {
+    if (tamano >= 32 && tamano < (long(256) << 20)) {
       datos.resize(size_t(tamano));
       if (fread(datos.data(), 1, datos.size(), f) != datos.size()) {
         datos.clear();
+        archivo_corrupto = true;
       }
+    } else if (tamano > 0) {
+      archivo_corrupto = true;
     }
     fclose(f);
   }
@@ -217,12 +225,17 @@ void VulkanPipelineCache::NfsmwCargarCacheVulkan(const std::filesystem::path& ca
     std::memcpy(cabecera, datos.data(), sizeof(cabecera));
     if (cabecera[0] < 32 || cabecera[1] != uint32_t(VK_PIPELINE_CACHE_HEADER_VERSION_ONE) ||
         cabecera[2] != propiedades.vendorID || cabecera[3] != propiedades.deviceID) {
-      REXGPU_WARN("[cache de pipelines] {} no es de este driver: se empieza vacia",
+      REXGPU_WARN("[cache de pipelines] {} no es de este driver o esta corrupto: se purga y empieza vacia",
                   rex::path_to_utf8(nfsmw_cache_vulkan_ruta_.filename()));
       datos.clear();
+      archivo_corrupto = true;
     }
   } else {
     datos.clear();
+  }
+  if (archivo_corrupto) {
+    std::error_code ec;
+    std::filesystem::remove(nfsmw_cache_vulkan_ruta_, ec);
   }
   VkPipelineCacheCreateInfo info = {};
   info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
@@ -230,7 +243,9 @@ void VulkanPipelineCache::NfsmwCargarCacheVulkan(const std::filesystem::path& ca
   info.pInitialData = datos.empty() ? nullptr : datos.data();
   VkPipelineCache cache = VK_NULL_HANDLE;
   if (dfn.vkCreatePipelineCache(device, &info, nullptr, &cache) != VK_SUCCESS) {
-    // Con los datos rechazados, una vacia.
+    // Con los datos rechazados, purgar archivo corrupto e iniciar una vacia.
+    std::error_code ec;
+    std::filesystem::remove(nfsmw_cache_vulkan_ruta_, ec);
     info.initialDataSize = 0;
     info.pInitialData = nullptr;
     if (dfn.vkCreatePipelineCache(device, &info, nullptr, &cache) != VK_SUCCESS) {
@@ -252,28 +267,31 @@ void VulkanPipelineCache::NfsmwGuardarCacheVulkan() {
     return;
   }
   const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
+  if (!vulkan_device) {
+    return;
+  }
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
   const VkDevice device = vulkan_device->device();
-  size_t tamano = 0;
-  if (dfn.vkGetPipelineCacheData(device, cache, &tamano, nullptr) != VK_SUCCESS || tamano < 32) {
+  size_t exact_size = 0;
+  if (dfn.vkGetPipelineCacheData(device, cache, &exact_size, nullptr) != VK_SUCCESS || exact_size < 32) {
     return;
   }
-  // Provide safety margin for concurrent pipeline creation so MoltenVK doesn't fail header stream write
-  size_t buffer_size = tamano + 65536;
-  std::vector<uint8_t> datos(buffer_size);
-  size_t query_size = buffer_size;
-  const VkResult resultado = dfn.vkGetPipelineCacheData(device, cache, &query_size, datos.data());
-  if ((resultado != VK_SUCCESS && resultado != VK_INCOMPLETE) || query_size < 32) {
+  std::vector<uint8_t> datos(exact_size);
+  size_t retrieved_size = exact_size;
+  const VkResult resultado = dfn.vkGetPipelineCacheData(device, cache, &retrieved_size, datos.data());
+  // Strictly require VK_SUCCESS. Never accept VK_INCOMPLETE or truncated data.
+  if (resultado != VK_SUCCESS || retrieved_size < 32 || retrieved_size > exact_size) {
     return;
   }
-  datos.resize(query_size);
+  datos.resize(retrieved_size);
   std::filesystem::path temporal = nfsmw_cache_vulkan_ruta_;
   temporal += ".tmp";
   FILE* f = rex::filesystem::OpenFile(temporal, "wb");
   if (!f) {
     return;
   }
-  const bool escrito = fwrite(datos.data(), 1, datos.size(), f) == datos.size();
+  const bool escrito = (fwrite(datos.data(), 1, datos.size(), f) == datos.size());
+  fflush(f);
   fclose(f);
   std::error_code error;
   if (escrito) {

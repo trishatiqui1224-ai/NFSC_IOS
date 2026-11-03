@@ -204,8 +204,8 @@ std::vector<std::string> GameArguments(const fs::path& docs, const fs::path& iso
       "--carbon_single_pass=true",
       "--nfsmw_una_pasada=false",
       "--audio_maxqframes=64",
-      "--ios_xma_starve_reset=false",
-      "--ios_utility_qos_guest=false",
+      "--ios_xma_starve_reset=true",
+      "--ios_utility_qos_guest=true",
       "--ios_utility_qos=false",
       "--anisotropic_override=16",
       "--present_effect=cas",
@@ -521,7 +521,19 @@ int main(int argc, char* argv[]) {
       SetArgument(texts, a);
       boot::Trace("setting: " + a);
     }
+    // Enforce safe audio reset & QoS defaults for race level loads
+    SetArgument(texts, "--ios_xma_starve_reset=true");
+    SetArgument(texts, "--ios_utility_qos_guest=true");
     ApplyExtraArguments(docs / "extra_args.txt", texts);
+    // Enforce EDRAM-safe guest scene resolution (max 1560x720 / 900 tiles)
+    for (auto& t : texts) {
+      if (OptionName(t) == "--carbon_scene_resolution" || OptionName(t) == "--resolution") {
+        unsigned w = 0, h = 0;
+        if (sscanf(t.c_str() + t.find('=') + 1, "%ux%u", &w, &h) == 2 && (w > 1600 || h > 720 || (w * h > 1560 * 720))) {
+          t = OptionName(t) + "=1560x720";
+        }
+      }
+    }
     if (std::find(texts.begin(), texts.end(), std::string("--log_level=off")) != texts.end()) {
       boot::Trace("logging off");
       boot::SetEnabled(false);

@@ -35,7 +35,7 @@ CVAR_NEW = '''#include <rex/stream.h>
 #include <rex/cvar.h>  // LOCAL PATCH - iOS (tools/ios/patch_ios_xma_starve_switch.py)
 
 // LOCAL PATCH - iOS (tools/ios/patch_ios_xma_starve_switch.py).
-REXCVAR_DEFINE_BOOL(ios_xma_starve_reset, false, "Audio",
+REXCVAR_DEFINE_BOOL(ios_xma_starve_reset, true, "Audio",
                     "iOS: a stream that runs out of input drops the output the game has not "
                     "read yet (Xenia Canary's NFS stall detector fix)");
 '''
