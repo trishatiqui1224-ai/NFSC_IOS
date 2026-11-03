@@ -130,6 +130,92 @@ void NoopTrap(PPCContext& ctx, uint8_t* base) {
     return;
   }
 
+  // Dynamic instruction decoder for uncompiled adjustors and leaf returns in .text
+  if (base && target >= 0x82110000u && target + 8 <= 0x82B35C64u && (target & 3) == 0) {
+    const uint32_t inst0 = REX_LOAD_U32(target);
+    const uint32_t inst1 = REX_LOAD_U32(target + 4);
+
+    // 1. Unconditional blr: preserve caller registers and return safely.
+    if (inst0 == 0x4E800020u) {
+      REXLOG_WARN("[dispatch] DYNAMIC RESOLVE: target 0x{:08X} is blr (leaf return), returning safely", target);
+      return;
+    }
+
+    // 2. addi r3, r3, simm; b target2
+    if ((inst0 & 0xFFFF0000u) == 0x38630000u && ((inst1 >> 26) & 0x3Fu) == 18u) {
+      const int16_t simm = static_cast<int16_t>(inst0 & 0xFFFFu);
+      uint32_t li = inst1 & 0x03FFFFFCu;
+      if (li & 0x02000000u) {
+        li |= 0xFC000000u;
+      }
+      const bool aa = (inst1 & 2u) != 0;
+      const uint32_t branch_target = aa ? li : (target + 4u + li);
+
+      REXLOG_WARN("[dispatch] DYNAMIC ADJUSTOR: target 0x{:08X} (addi r3, r3, {}; b 0x{:08X})",
+                  target, simm, branch_target);
+      ctx.r3.s64 = ctx.r3.s64 + simm;
+      REX_CALL_INDIRECT_FUNC(branch_target);
+      return;
+    }
+
+    // 3. addi r4, r4, simm; b target2
+    if ((inst0 & 0xFFFF0000u) == 0x38840000u && ((inst1 >> 26) & 0x3Fu) == 18u) {
+      const int16_t simm = static_cast<int16_t>(inst0 & 0xFFFFu);
+      uint32_t li = inst1 & 0x03FFFFFCu;
+      if (li & 0x02000000u) {
+        li |= 0xFC000000u;
+      }
+      const bool aa = (inst1 & 2u) != 0;
+      const uint32_t branch_target = aa ? li : (target + 4u + li);
+
+      REXLOG_WARN("[dispatch] DYNAMIC ADJUSTOR: target 0x{:08X} (addi r4, r4, {}; b 0x{:08X})",
+                  target, simm, branch_target);
+      ctx.r4.s64 = ctx.r4.s64 + simm;
+      REX_CALL_INDIRECT_FUNC(branch_target);
+      return;
+    }
+
+    // 4. mr r3, r4; b target2
+    if (inst0 == 0x7C832378u && ((inst1 >> 26) & 0x3Fu) == 18u) {
+      uint32_t li = inst1 & 0x03FFFFFCu;
+      if (li & 0x02000000u) {
+        li |= 0xFC000000u;
+      }
+      const bool aa = (inst1 & 2u) != 0;
+      const uint32_t branch_target = aa ? li : (target + 4u + li);
+
+      REXLOG_WARN("[dispatch] DYNAMIC THUNK: target 0x{:08X} (mr r3, r4; b 0x{:08X})",
+                  target, branch_target);
+      ctx.r3.u64 = ctx.r4.u64;
+      REX_CALL_INDIRECT_FUNC(branch_target);
+      return;
+    }
+
+    // 5. Unconditional direct branch: b target2 (not bl)
+    if (((inst0 >> 26) & 0x3Fu) == 18u && (inst0 & 1u) == 0) {
+      uint32_t li = inst0 & 0x03FFFFFCu;
+      if (li & 0x02000000u) {
+        li |= 0xFC000000u;
+      }
+      const bool aa = (inst0 & 2u) != 0;
+      const uint32_t branch_target = aa ? li : (target + li);
+
+      REXLOG_WARN("[dispatch] DYNAMIC BRANCH: target 0x{:08X} (b 0x{:08X})",
+                  target, branch_target);
+      REX_CALL_INDIRECT_FUNC(branch_target);
+      return;
+    }
+
+    // 6. li r3, simm; blr (0x3860xxxx; 0x4E800020)
+    if ((inst0 & 0xFFFF0000u) == 0x38600000u && inst1 == 0x4E800020u) {
+      const int16_t simm = static_cast<int16_t>(inst0 & 0xFFFFu);
+      REXLOG_WARN("[dispatch] DYNAMIC CONSTANT RETURN: target 0x{:08X} (li r3, {}; blr)",
+                  target, simm);
+      ctx.r3.s64 = simm;
+      return;
+    }
+  }
+
   uint32_t caller_lr = static_cast<uint32_t>(ctx.lr);
   if (caller_lr == 0 && base) {
     const uint32_t sp = ctx.r1.u32;

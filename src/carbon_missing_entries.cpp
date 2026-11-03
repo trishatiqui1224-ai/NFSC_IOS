@@ -42,6 +42,48 @@ void Carbon_8216D770(PPCContext& ctx, uint8_t* base) {
   REX_CALL_INDIRECT_FUNC(0x82125CD8);
 }
 
+// General adjustor thunk templates:
+template <int32_t Offset, uint32_t Target>
+void Carbon_Adjustor_R3(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
+  ctx.r3.s64 = ctx.r3.s64 + Offset;
+  REX_CALL_INDIRECT_FUNC(Target);
+}
+
+template <int32_t Offset, uint32_t Target>
+void Carbon_Adjustor_R4(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
+  ctx.r4.s64 = ctx.r4.s64 + Offset;
+  REX_CALL_INDIRECT_FUNC(Target);
+}
+
+template <::PPCFunc Func>
+inline void RegisterAdjustor(rex::runtime::FunctionDispatcher* dispatcher, uint32_t addr) {
+  if (!dispatcher->GetFunction(addr)) {
+    dispatcher->SetFunction(addr, Func);
+  }
+}
+
+// USA 0x82531FB8: vtable adjustor thunk (addi r3, r3, 84; b 0x8253BFB0)
+// Called from lr=0x826091F4 with r3=0xBFAC43CC.
+void Carbon_82531FB8(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
+  ctx.r3.s64 = ctx.r3.s64 + 84;
+  REX_CALL_INDIRECT_FUNC(0x8253BFB0);
+}
+
+// USA 0x8249B6B0: vtable adjustor thunk (addi r3, r3, -8; b 0x82482B10)
+// Called from lr=0x821377F8 with r3=0xBFAA32D8.
+void Carbon_8249B6B0(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
+  ctx.r3.s64 = ctx.r3.s64 - 8;
+  REX_CALL_INDIRECT_FUNC(0x82482B10);
+}
+
+// USA 0x8249B7E0: vtable adjustor thunk (addi r3, r3, -8; b 0x82482B20)
+// Called from lr=0x82137814 with r3=0xBFAA32D8.
+// sub_82482B20 fetches member pointer at *(r11)+0x20 and returns it in r3.
+void Carbon_8249B7E0(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
+  ctx.r3.s64 = ctx.r3.s64 - 8;
+  REX_CALL_INDIRECT_FUNC(0x82482B20);
+}
+
 // USA equivalent of PAL 0x82296468 -- exact byte match at 0x82296388 (-0xE0 shift).
 void Carbon_82296388(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
   ctx.cr6.compare<uint32_t>(ctx.r4.u32, 1, ctx.xer);
@@ -247,4 +289,127 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
       }
     }
   }
+
+  // USA 0x82531FB8: vtable adjustor (+84 -> 0x8253BFB0) for Career / Car Select
+  RegisterAdjustor<Carbon_82531FB8>(dispatcher, 0x82531FB8);
+
+  // USA 0x8249B6B0: vtable adjustor (-8 -> 0x82482B10) for Career / Quick Race
+  RegisterAdjustor<Carbon_8249B6B0>(dispatcher, 0x8249B6B0);
+
+  // USA 0x8249B7E0: vtable adjustor (-8 -> 0x82482B20) for Career / Quick Race
+  RegisterAdjustor<Carbon_8249B7E0>(dispatcher, 0x8249B7E0);
+
+  // Contiguous virtual adjustor thunk table at 0x8249B688..0x8249B838
+  RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x824A0168>>(dispatcher, 0x8249B688);
+  RegisterAdjustor<Carbon_Adjustor_R3<-180, 0x82482EB8>>(dispatcher, 0x8249B690);
+  RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x8247D628>>(dispatcher, 0x8249B698);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82482850>>(dispatcher, 0x8249B6A0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x82482B30>>(dispatcher, 0x8249B6A8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x824853F0>>(dispatcher, 0x8249B6B8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x82483CE8>>(dispatcher, 0x8249B6C0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-12, 0x82481410>>(dispatcher, 0x8249B6C8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-64, 0x82485798>>(dispatcher, 0x8249B6D0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-172, 0x8247A590>>(dispatcher, 0x8249B6D8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-96, 0x82485798>>(dispatcher, 0x8249B6E0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x82482AF0>>(dispatcher, 0x8249B6E8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x82480C08>>(dispatcher, 0x8249B6F0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-8, 0x8247FD18>>(dispatcher, 0x8249B6F8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-228, 0x82483CE8>>(dispatcher, 0x8249B700);
+  RegisterAdjustor<Carbon_Adjustor_R3<-48, 0x8247A8F0>>(dispatcher, 0x8249B708);
+  RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x82482B20>>(dispatcher, 0x8249B710);
+  RegisterAdjustor<Carbon_Adjustor_R3<-20, 0x824821C8>>(dispatcher, 0x8249B718);
+  RegisterAdjustor<Carbon_Adjustor_R3<-48, 0x8247D628>>(dispatcher, 0x8249B720);
+  RegisterAdjustor<Carbon_Adjustor_R3<-72, 0x82485798>>(dispatcher, 0x8249B728);
+  RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x824A01B8>>(dispatcher, 0x8249B730);
+  RegisterAdjustor<Carbon_Adjustor_R3<-48, 0x824853F0>>(dispatcher, 0x8249B738);
+  RegisterAdjustor<Carbon_Adjustor_R3<-208, 0x8247A8F0>>(dispatcher, 0x8249B740);
+  RegisterAdjustor<Carbon_Adjustor_R3<-48, 0x82483CE8>>(dispatcher, 0x8249B748);
+  RegisterAdjustor<Carbon_Adjustor_R3<-12, 0x82481390>>(dispatcher, 0x8249B750);
+  RegisterAdjustor<Carbon_Adjustor_R3<-208, 0x8247D628>>(dispatcher, 0x8249B758);
+  RegisterAdjustor<Carbon_Adjustor_R3<-8, 0x82482B30>>(dispatcher, 0x8249B760);
+  RegisterAdjustor<Carbon_Adjustor_R3<-236, 0x82483CE8>>(dispatcher, 0x8249B768);
+  RegisterAdjustor<Carbon_Adjustor_R3<-56, 0x8247A8F0>>(dispatcher, 0x8249B770);
+  RegisterAdjustor<Carbon_Adjustor_R3<-20, 0x82482070>>(dispatcher, 0x8249B778);
+  RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x82482B10>>(dispatcher, 0x8249B780);
+  RegisterAdjustor<Carbon_Adjustor_R3<-48, 0x82480C08>>(dispatcher, 0x8249B788);
+  RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x8249FF48>>(dispatcher, 0x8249B790);
+  RegisterAdjustor<Carbon_Adjustor_R3<-56, 0x8247D628>>(dispatcher, 0x8249B798);
+  RegisterAdjustor<Carbon_Adjustor_R3<-80, 0x82485798>>(dispatcher, 0x8249B7A0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-208, 0x82483CE8>>(dispatcher, 0x8249B7A8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x82482C70>>(dispatcher, 0x8249B7B0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x824A0190>>(dispatcher, 0x8249B7B8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-56, 0x82483CE8>>(dispatcher, 0x8249B7C0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-172, 0x8247A598>>(dispatcher, 0x8249B7C8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-216, 0x8247D628>>(dispatcher, 0x8249B7D0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-172, 0x8247B3A8>>(dispatcher, 0x8249B7D8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-180, 0x82482EC0>>(dispatcher, 0x8249B7E8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-12, 0x82479900>>(dispatcher, 0x8249B7F0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-56, 0x82480C08>>(dispatcher, 0x8249B7F8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-12, 0x824812C0>>(dispatcher, 0x8249B800);
+  RegisterAdjustor<Carbon_Adjustor_R4<-8, 0x82482CA0>>(dispatcher, 0x8249B808);
+  RegisterAdjustor<Carbon_Adjustor_R3<-216, 0x82483CE8>>(dispatcher, 0x8249B810);
+  RegisterAdjustor<Carbon_Adjustor_R3<-220, 0x8247D628>>(dispatcher, 0x8249B818);
+  RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x8247A8F0>>(dispatcher, 0x8249B820);
+  RegisterAdjustor<Carbon_Adjustor_R3<-20, 0x824799F0>>(dispatcher, 0x8249B828);
+  RegisterAdjustor<Carbon_Adjustor_R3<-12, 0x824799D0>>(dispatcher, 0x8249B830);
+
+  // Sibling vtable adjustors in .rdata
+  RegisterAdjustor<Carbon_Adjustor_R3<-80, 0x82136358>>(dispatcher, 0x8216D608);
+  RegisterAdjustor<Carbon_Adjustor_R3<-112, 0x82142540>>(dispatcher, 0x8216D628);
+  RegisterAdjustor<Carbon_Adjustor_R3<-600, 0x8213FDB0>>(dispatcher, 0x8216D7B0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-40, 0x82125CD8>>(dispatcher, 0x8216D7E0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-72, 0x821247A8>>(dispatcher, 0x8216D800);
+  RegisterAdjustor<Carbon_Adjustor_R3<-64, 0x82170CB0>>(dispatcher, 0x821896C8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-40, 0x82308180>>(dispatcher, 0x82356C68);
+  RegisterAdjustor<Carbon_Adjustor_R3<-100, 0x824ABAF0>>(dispatcher, 0x824D5010);
+  RegisterAdjustor<Carbon_Adjustor_R3<-304, 0x824A8FE8>>(dispatcher, 0x824D50F8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-88, 0x824C7D30>>(dispatcher, 0x824D5148);
+  RegisterAdjustor<Carbon_Adjustor_R3<-88, 0x824C84C8>>(dispatcher, 0x824D5198);
+  RegisterAdjustor<Carbon_Adjustor_R3<-28, 0x8253A388>>(dispatcher, 0x82541688);
+  RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x825310C0>>(dispatcher, 0x825416B0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-48, 0x8252E4F8>>(dispatcher, 0x82541708);
+  RegisterAdjustor<Carbon_Adjustor_R3<-44, 0x825310C0>>(dispatcher, 0x82541740);
+  RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x82535958>>(dispatcher, 0x82541750);
+  RegisterAdjustor<Carbon_Adjustor_R3<-72, 0x82533F60>>(dispatcher, 0x82541760);
+  RegisterAdjustor<Carbon_Adjustor_R3<-48, 0x82533CD0>>(dispatcher, 0x82541778);
+  RegisterAdjustor<Carbon_Adjustor_R3<-72, 0x82535958>>(dispatcher, 0x825417A8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-56, 0x82607D58>>(dispatcher, 0x82614018);
+  RegisterAdjustor<Carbon_Adjustor_R3<-152, 0x82607D58>>(dispatcher, 0x82614030);
+  RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x82607D58>>(dispatcher, 0x82614078);
+  RegisterAdjustor<Carbon_Adjustor_R3<-136, 0x82607D58>>(dispatcher, 0x826140C8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-4, 0x82639348>>(dispatcher, 0x82642670);
+  RegisterAdjustor<Carbon_Adjustor_R3<1, 0x82949918>>(dispatcher, 0x8294CEA8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-148, 0x82958500>>(dispatcher, 0x82958518);
+  RegisterAdjustor<Carbon_Adjustor_R3<-148, 0x829586D8>>(dispatcher, 0x82958700);
+  RegisterAdjustor<Carbon_Adjustor_R3<-148, 0x829EC2C0>>(dispatcher, 0x829EC2D0);
+  RegisterAdjustor<Carbon_Adjustor_R3<4, 0x829F4A28>>(dispatcher, 0x829F4A90);
+  RegisterAdjustor<Carbon_Adjustor_R4<-8, 0x82A00BD8>>(dispatcher, 0x82A00CF0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-8, 0x82A00C10>>(dispatcher, 0x82A00CF8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-8, 0x82A01768>>(dispatcher, 0x82A00D00);
+  RegisterAdjustor<Carbon_Adjustor_R3<-12, 0x82A01768>>(dispatcher, 0x82A00D10);
+  RegisterAdjustor<Carbon_Adjustor_R3<-4, 0x82A13D18>>(dispatcher, 0x82A13D10);
+  RegisterAdjustor<Carbon_Adjustor_R3<-8, 0x82A13D18>>(dispatcher, 0x82A13DB0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-4, 0x82A469C8>>(dispatcher, 0x82A469C0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-4, 0x82A584A8>>(dispatcher, 0x82A584D0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-4, 0x82A58460>>(dispatcher, 0x82A584D8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-4, 0x82A58B48>>(dispatcher, 0x82A58C00);
+  RegisterAdjustor<Carbon_Adjustor_R3<-4, 0x82A59238>>(dispatcher, 0x82A59A88);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A634D8>>(dispatcher, 0x82A64218);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A63728>>(dispatcher, 0x82A64258);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A63218>>(dispatcher, 0x82A64270);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A63318>>(dispatcher, 0x82A64288);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A63260>>(dispatcher, 0x82A64298);
+  RegisterAdjustor<Carbon_Adjustor_R3<-4, 0x82A631C8>>(dispatcher, 0x82A642A0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A64398>>(dispatcher, 0x82A65708);
+  RegisterAdjustor<Carbon_Adjustor_R3<-4, 0x82A664C8>>(dispatcher, 0x82A66B60);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A66548>>(dispatcher, 0x82A66B80);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A66608>>(dispatcher, 0x82A66B88);
+  RegisterAdjustor<Carbon_Adjustor_R3<-4, 0x82A66530>>(dispatcher, 0x82A66BA0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A66558>>(dispatcher, 0x82A66BA8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A66570>>(dispatcher, 0x82A66BB0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A666B0>>(dispatcher, 0x82A66BB8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A66540>>(dispatcher, 0x82A66BD0);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A66580>>(dispatcher, 0x82A66BD8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A66820>>(dispatcher, 0x82A66BE8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82A66660>>(dispatcher, 0x82A66C00);
 }

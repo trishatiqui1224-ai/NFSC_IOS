@@ -63,6 +63,9 @@ REQUIRED_USA_SYMBOLS = [
     (0x824DA968, "sub_824DA968", "USA Frontend init callback (0x824DA968)"),
     (0x825BF728, "sub_825BF728", "USA Car Selection / Quick Race callback (0x825BF728)"),
     (0x821A3EC8, "sub_821A3EC8", "USA flasher/callback method called from 0x82690F0C (0x821A3EC8..0x821A3ED0)"),
+    (0x82531FB8, "sub_82531FB8", "USA Car Select / Career vtable adjustor (0x82531FB8)"),
+    (0x8249B6B0, "sub_8249B6B0", "USA Quick Race / Career vtable adjustor (0x8249B6B0)"),
+    (0x8249B7E0, "sub_8249B7E0", "USA Quick Race / Career vtable adjustor (0x8249B7E0)"),
 ]
 
 # Forbidden PAL-only symbols that must NEVER appear as function starts
