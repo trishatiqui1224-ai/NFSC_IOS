@@ -144,7 +144,7 @@ jobs:
           python3 tools/verify_usa_codegen.py
           echo "[CI] USA codegen verification PASSED."
 
-      - name: Pre-Flight Check: Verify Argv & Post-Launcher Handoff (ASan/UBSan)
+      - name: "Pre-Flight Check: Verify Argv & Post-Launcher Handoff (ASan/UBSan)"
         run: |
           echo "[CI] Compiling and running host argv deduplication and handoff test with ASan/UBSan..."
           clang++ -std=c++20 -fsanitize=address,undefined -Wall -Wextra tools/test_argv_dedup.cpp -o /tmp/test_argv_dedup
