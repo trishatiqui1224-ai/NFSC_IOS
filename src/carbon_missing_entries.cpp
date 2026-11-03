@@ -29,6 +29,12 @@ void Carbon_MemberAdapter(PPCContext& ctx, uint8_t* base) {
 void Carbon_Blr([[maybe_unused]] PPCContext& ctx,
                 [[maybe_unused]] uint8_t* base) {}
 
+// USA 0x821A3EC8: flasher callback / thunk (mr r3, r4; b 0x821A35E0), called from lr=0x82690F0C.
+void Carbon_821A3EC8(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
+  ctx.r3.u64 = ctx.r4.u64;
+  REX_CALL_INDIRECT_FUNC(0x821A35E0);
+}
+
 // USA equivalent of PAL 0x82641480: addi r3,r3,-4; b <target>
 // PAL target was 0x8262DB10; USA target is 0x82125CD8.
 void Carbon_8216D770(PPCContext& ctx, uint8_t* base) {
@@ -229,6 +235,16 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
     }
     if (ok && dispatcher->SetFunction(address, &Carbon_82321FC8)) {
       REXLOG_INFO("[carbon] Registered verified PPC entry 0x82321FC8 (USA, PAL was 0x82322048)");
+    }
+  }
+  // USA 0x821A3EC8: flasher callback / thunk (mr r3, r4; b 0x821A35E0), called from lr=0x82690F0C.
+  constexpr uint32_t flasher_thunk = 0x821A3EC8;
+  if (!dispatcher->GetFunction(flasher_thunk)) {
+    if (REX_LOAD_U32(flasher_thunk) == 0x7C832378 &&
+        REX_LOAD_U32(flasher_thunk + 4) == 0x4BFFF714) {
+      if (dispatcher->SetFunction(flasher_thunk, &Carbon_821A3EC8)) {
+        REXLOG_INFO("[carbon] Registered verified flasher callback 0x821A3EC8 (USA, called from 0x82690F0C)");
+      }
     }
   }
 }

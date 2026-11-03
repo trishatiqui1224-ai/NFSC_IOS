@@ -209,7 +209,9 @@ std::vector<std::string> GameArguments(const fs::path& docs, const fs::path& iso
       "--ios_utility_qos=false",
       "--anisotropic_override=16",
       "--present_effect=cas",
-      "--carbon_scene_resolution=2340x1080",
+      "--resolution=1560x720",
+      "--carbon_scene_resolution=1560x720",
+      "--ios_display_preset=1080p",
       // The Xbox 360 language and country of the game's edition (USA).
       std::string("--user_language=") + NFSCARBON_GAME_LANGUAGE,
       std::string("--user_country=") + NFSCARBON_GAME_COUNTRY,
@@ -500,6 +502,16 @@ int main(int argc, char* argv[]) {
   }
   boot::Trace(std::string("mode: ") + (play ? "game" : "probe") +
               ((NFSCARBON_WITH_GAME || NFSMW_WITH_GAME) ? "" : " (this build has no game code)"));
+
+  // Reset any saved resolutions > 1600x720 to avoid 11-bit Xenos EDRAM overflow (max 900 tiles)
+  NSUserDefaults* defs = [NSUserDefaults standardUserDefaults];
+  NSString* saved_cres = [defs stringForKey:@"carbon_scene_resolution"];
+  if (saved_cres) {
+    unsigned w = 0, h = 0;
+    if (sscanf(saved_cres.UTF8String, "%ux%u", &w, &h) == 2 && (w > 1600 || h > 720)) {
+      [defs setObject:@"1560x720" forKey:@"carbon_scene_resolution"];
+    }
+  }
 
   std::vector<std::string> texts{argc > 0 ? argv[0] : "nfscarbon"};
   if (play) {

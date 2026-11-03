@@ -34,6 +34,11 @@
 // swapchain is rebuilt from it.
 
 #import <UIKit/UIKit.h>
+#import <QuartzCore/CAMetalLayer.h>
+#include <rex/cvar.h>
+
+REXCVAR_DEFINE_STRING(ios_display_preset, "1080p", "Display",
+                      "Host display quality preset: 720p, 900p, 1080p, retina");
 
 #include <rex/logging.h>
 
@@ -207,6 +212,45 @@ void KeepMetalViewWindowSized() {
       v.frame = window.bounds;
       [v setNeedsLayout];
       [v layoutIfNeeded];
+    }
+  }
+
+  // Adjust CAMetalLayer drawableSize & contentsScale based on ios_display_preset
+  if ([view.layer isKindOfClass:[CAMetalLayer class]]) {
+    CAMetalLayer* metalLayer = (CAMetalLayer*)view.layer;
+    UIScreen* screen = window.screen ?: UIScreen.mainScreen;
+    const CGFloat native_scale = screen.nativeScale ?: (screen.scale ?: 2.0);
+    const CGSize screen_pixels = screen.nativeBounds.size;
+    const CGFloat max_dim = std::max(screen_pixels.width, screen_pixels.height);
+    const CGFloat min_dim = std::min(screen_pixels.width, screen_pixels.height);
+    const CGFloat aspect = (min_dim > 0) ? (max_dim / min_dim) : (16.0 / 9.0);
+
+    const std::string preset = REXCVAR_GET(ios_display_preset);
+    uint32_t target_h = 1080;
+    if (preset == "720p") target_h = 720;
+    else if (preset == "900p") target_h = 900;
+    else if (preset == "retina") target_h = uint32_t(std::lround(min_dim));
+    else target_h = 1080;
+
+    if (target_h > min_dim) target_h = uint32_t(std::lround(min_dim));
+
+    uint32_t target_w = uint32_t(std::lround(target_h * aspect));
+    target_w = (target_w + 1) & ~1u;
+
+    CGFloat scale = CGFloat(target_h) / (window.bounds.size.height > 0 ? window.bounds.size.height : 1.0);
+    if (preset == "retina") {
+      scale = native_scale;
+      target_w = uint32_t(std::lround(max_dim));
+      target_h = uint32_t(std::lround(min_dim));
+    }
+
+    if (std::abs(metalLayer.contentsScale - scale) > 0.001 ||
+        metalLayer.drawableSize.width != target_w ||
+        metalLayer.drawableSize.height != target_h) {
+      metalLayer.contentsScale = scale;
+      metalLayer.drawableSize = CGSizeMake(target_w, target_h);
+      REXLOG_INFO("[ios] Display preset '{}': CAMetalLayer contentsScale={:.3f}, drawableSize={}x{}",
+                  preset, scale, target_w, target_h);
     }
   }
 }

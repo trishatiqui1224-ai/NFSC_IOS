@@ -62,6 +62,7 @@ REQUIRED_USA_SYMBOLS = [
     (0x82A66790, "sub_82A66790", "USA direct branch entrypoint (0x82A66790..0x82A668D8)"),
     (0x824DA968, "sub_824DA968", "USA Frontend init callback (0x824DA968)"),
     (0x825BF728, "sub_825BF728", "USA Car Selection / Quick Race callback (0x825BF728)"),
+    (0x821A3EC8, "sub_821A3EC8", "USA flasher/callback method called from 0x82690F0C (0x821A3EC8..0x821A3ED0)"),
 ]
 
 # Forbidden PAL-only symbols that must NEVER appear as function starts
@@ -207,7 +208,47 @@ def scan_code_referenced_functions(xex_path: pathlib.Path, pdata: list[tuple[int
         if is_prev_barrier or is_prologue:
             valid.append(c)
 
-    print(f"[build_usa_codegen] lis+addi/ori scan discovered {len(valid)} candidate non-pdata leaf functions.")
+    # Also scan .rdata and .data sections for 32-bit aligned function pointers (e.g. vtables, callback tables)
+    import bisect
+    pdata_starts = [s for s, e in pdata]
+    pdata_ends = [e for s, e in pdata]
+    rdata_candidates = set()
+    data_ranges = [(s, e) for name, s, e in secs if name in ['.rdata', '.data']]
+    for d_start, d_end in data_ranges:
+        for ptr_addr in range(d_start, d_end - 4, 4):
+            val = struct.unpack_from('>I', img, ptr_addr - base)[0]
+            if 0x82110000 <= val < 0x82B35C64 and (val % 4) == 0:
+                # Check that val is not strictly inside any [start, end)
+                idx = bisect.bisect_right(pdata_starts, val)
+                if idx > 0 and val < pdata_ends[idx - 1]:
+                    continue
+                if idx < len(pdata_starts) and val == pdata_starts[idx]:
+                    continue
+                rdata_candidates.add(val)
+
+    # Validate each candidate has a barrier or prologue
+    for c in sorted(rdata_candidates):
+        offset = c - base
+        if offset < 4 or offset >= len(img) - 8:
+            continue
+        prev_inst = struct.unpack_from('>I', img, offset - 4)[0]
+        inst0 = struct.unpack_from('>I', img, offset)[0]
+        is_prev_barrier = (
+            (prev_inst & 0xFC000003) == 0x48000000 or
+            prev_inst == 0x4E800020 or
+            (prev_inst & 0xFC0007FE) == 0x4C000420 or
+            prev_inst in [0x00000000, 0x60000000]
+        )
+        is_prologue = (
+            inst0 == 0x7C0802A6 or
+            (inst0 & 0xFFFF0000) == 0x94210000 or
+            (inst0 & 0xFFFF0000) == 0x7C830000  # mr r3, r4
+        )
+        if is_prev_barrier or is_prologue:
+            if c not in valid:
+                valid.append(c)
+
+    print(f"[build_usa_codegen] Code + data scan discovered {len(valid)} candidate non-pdata leaf functions.")
     return valid
 
 

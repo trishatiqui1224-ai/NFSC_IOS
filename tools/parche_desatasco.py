@@ -141,7 +141,7 @@ NUEVO = """u32 XMAGetOutputBufferWriteOffset_entry(mapped_void context_ptr) {
       // muestra por mucho que se le insista, asi que esperar no arregla nada.
       // Y con los offsets distintos el juego nunca llega a preguntar si el
       // buffer sigue valido, que es su unica salida.
-      const bool atascado = llevo > 250 && context.output_buffer_valid &&
+      const bool atascado = llevo > 40 && context.output_buffer_valid &&
                             !context.input_buffer_0_valid && !context.input_buffer_1_valid &&
                             context.output_buffer_write_offset != context.output_buffer_read_offset;
 

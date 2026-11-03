@@ -16,7 +16,7 @@
 // those addresses; on a mismatch they log once and do nothing.
 //
 // Cvars: carbon_single_pass (off by default until verified on device),
-// carbon_scene_resolution ("WxH", default 1280x720; height rounded up to 32 for
+// carbon_scene_resolution ("WxH", default 1560x720; height rounded up to 32 for
 // the tile).
 
 #include <cstdint>
@@ -31,8 +31,8 @@
 
 REXCVAR_DEFINE_BOOL(carbon_single_pass, false, "Carbon",
                     "Render the scene in retail mode 2 (one tile, no MSAA)");
-REXCVAR_DEFINE_STRING(carbon_scene_resolution, "1280x720", "Carbon",
-                      "Scene resolution for carbon_single_pass: 1024x576, 1280x720 or WxH");
+REXCVAR_DEFINE_STRING(carbon_scene_resolution, "1560x720", "Carbon",
+                      "Scene resolution for carbon_single_pass: 1280x720, 1560x720 or WxH");
 
 #if defined(__APPLE__)
 // On Mach-O, weak_import is required for undefined weak symbols (not [[gnu::weak]]).
@@ -86,7 +86,22 @@ std::pair<uint32_t, uint32_t> SceneSize() {
   unsigned width = 0, height = 0;
   if (std::sscanf(REXCVAR_GET(carbon_scene_resolution).c_str(), "%ux%u", &width, &height) != 2 ||
       width < 320 || width > 3840 || height < 180 || height > 2160) {
-    return {1280, 720};
+    return {1560, 720};
+  }
+  // Enforce Xenos 11-bit EDRAM hardware limit: single-pass color tiles must not exceed 900 tiles
+  // (leaving safe room for depth buffer at base 1128..2027 <= 2048 total tiles).
+  const uint32_t pitch_tiles = (width + 79) / 80;
+  const uint32_t tile_height = (height + 31) & ~31u;
+  const uint32_t rows = tile_height / 16;
+  if (pitch_tiles * rows > 900 || width > 1560 || height > 720) {
+    REXLOG_WARN("[render_mode] Requested scene resolution {}x{} exceeds 900 EDRAM tiles ({} tiles). Clamping to EDRAM-safe limit.",
+                width, height, pitch_tiles * rows);
+    // If wider than 16:9 (ratio > 1.8), clamp to 1560x720 (900 tiles), else 1280x720 (720 tiles).
+    if (double(width) / double(height ? height : 1) > 1.8) {
+      return {1560, 720};
+    } else {
+      return {1280, 720};
+    }
   }
   return {width, height};
 }
@@ -170,4 +185,3 @@ extern "C" REX_FUNC(sub_82500298) {
     WriteOutputSize(base);
   }
 }
-

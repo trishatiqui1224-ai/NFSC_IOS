@@ -56,6 +56,7 @@ REQUIRED_USA_SYMBOLS = [
     ("0x82A66790", "sub_82A66790", "USA direct branch entrypoint (0x82A66790)"),
     ("0x824DA968", "sub_824DA968", "USA Frontend init callback (0x824DA968)"),
     ("0x825BF728", "sub_825BF728", "USA Car Selection / Quick Race callback (0x825BF728)"),
+    ("0x821A3EC8", "sub_821A3EC8", "USA flasher/callback method called from 0x82690F0C"),
 ]
 
 # PAL-only addresses that must NOT appear (if they do, codegen was run on PAL XEX or has PAL splits).

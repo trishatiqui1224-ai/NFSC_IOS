@@ -336,8 +336,8 @@ const std::vector<Section>& Sections() {
             @"auto",
             {{@"Fit this screen", @"auto"}, {@"16:9 (Xbox 360)", @"16:9"}, {@"4:3", @"4:3"},
              {@"19.5:9", @"wide"}}},
-           {@"scene_res", Type::kChoice, @"Scene resolution",
-            @"Native internal 3D scene resolution for NFS Carbon. 1080p default provides razor-sharp visuals on Apple Silicon.",
+           {@"scene_res", Type::kChoice, @"Display Quality Preset",
+            @"Controls the Host Metal Drawable Size & GPU Spatial Upscaler (CAS/FSR). Guest EDRAM is locked to 720p to guarantee 100% corruption-free rendering.",
             @"1080p",
             {{@"720p (1560x720)", @"720p"}, {@"900p (1950x900)", @"900p"}, {@"1080p (2340x1080)", @"1080p"},
              {@"Native Retina (2622x1206)", @"retina"}}},
@@ -640,6 +640,20 @@ NSMutableDictionary<NSString*, NSString*>* LoadSettings(const fs::path& docs) {
     SaveSettings(docs, s);
   }
 
+  // Sanitize any previously saved high raw resolution strings into clean display presets
+  NSString* saved_scene_res = s[@"scene_res"];
+  if (saved_scene_res) {
+    if ([saved_scene_res isEqualToString:@"2340x1080"] || [saved_scene_res isEqualToString:@"1080p"]) {
+      s[@"scene_res"] = @"1080p";
+    } else if ([saved_scene_res isEqualToString:@"1950x900"] || [saved_scene_res isEqualToString:@"900p"]) {
+      s[@"scene_res"] = @"900p";
+    } else if ([saved_scene_res isEqualToString:@"2622x1206"] || [saved_scene_res isEqualToString:@"retina"]) {
+      s[@"scene_res"] = @"retina";
+    } else {
+      s[@"scene_res"] = @"720p";
+    }
+  }
+
   return s;
 }
 
@@ -742,14 +756,24 @@ std::vector<std::string> Arguments(NSDictionary<NSString*, NSString*>* s) {
   auto str = [&](NSString* key) { return std::string(Value(s, key).UTF8String); };
   std::vector<std::string> a;
 
-  // Screen and aspect ratio
+  // Lock guest --resolution and --carbon_scene_resolution in lockstep to EDRAM-safe dimensions:
+  // - Ultrawide iPhone (~19.5:9): 1560x720 (20t x 45r = 900 tiles, zero EDRAM overlap, runs at 113+ FPS on A19!)
+  // - Standard Widescreen (16:9 / iPad): 1280x720 (16t x 45r = 720 tiles)
+  // - 4:3 mode: 1024x768 (13t x 48r = 624 tiles)
   NSString* const aspect = ResolvedAspect(s);
   const bool wide = [aspect isEqualToString:@"wide"];
+  std::string guest_res = "1560x720";
   if ([aspect isEqualToString:@"4:3"]) {
-    a.push_back("--resolution=1024x768");
-  } else if (wide) {
-    a.push_back("--resolution=1560x720");
+    guest_res = "1024x768";
+  } else if (!wide && [aspect isEqualToString:@"16:9"]) {
+    guest_res = "1280x720";
   }
+  a.push_back("--resolution=" + guest_res);
+  a.push_back("--carbon_scene_resolution=" + guest_res);
+
+  // Host Display Preset (controls Metal drawable size & host GPU spatial upscaler CAS/FSR)
+  NSString* scene_res = Value(s, @"scene_res") ?: @"1080p";
+  a.push_back("--ios_display_preset=" + std::string(scene_res.UTF8String));
 
   // Render scale for emulated renderer
   NSString* scale = Value(s, @"scale");
@@ -786,19 +810,6 @@ std::vector<std::string> Arguments(NSDictionary<NSString*, NSString*>* s) {
   // Carbon scene and single-pass
   a.push_back("--carbon_single_pass=true");
   a.push_back("--nfsmw_una_pasada=false");
-  NSString* scene_res = Value(s, @"scene_res") ?: @"1080p";
-  if ([scene_res isEqualToString:@"720p"]) {
-    a.push_back("--carbon_scene_resolution=1560x720");
-  } else if ([scene_res isEqualToString:@"900p"]) {
-    a.push_back("--carbon_scene_resolution=1950x900");
-  } else if ([scene_res isEqualToString:@"retina"]) {
-    a.push_back("--carbon_scene_resolution=2622x1206");
-  } else if ([aspect isEqualToString:@"4:3"]) {
-    a.push_back("--carbon_scene_resolution=1024x768");
-  } else {
-    // 1080p default (2340x1080)
-    a.push_back("--carbon_scene_resolution=2340x1080");
-  }
 
   // GPU & Vulkan Settings
   a.push_back("--ios_async_submits=" + b(On(s, @"async_submits")));

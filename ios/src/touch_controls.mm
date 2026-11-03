@@ -359,10 +359,21 @@ static CGFloat TouchOpacity() {
 - (void)layoutSubviews {
   [super layoutSubviews];
   const CGFloat w = self.bounds.size.width, h = self.bounds.size.height;
-  const CGFloat unit = std::min(w / 16.0, h / 9.0);
+  UIEdgeInsets insets = self.window ? self.window.safeAreaInsets : self.safeAreaInsets;
+  const CGFloat maxSafeX = std::max(insets.left, insets.right);
+  const CGFloat leftMargin = maxSafeX > 0 ? (maxSafeX + 8.0) : 16.0;
+  const CGFloat rightMargin = leftMargin;
+  const CGFloat usableW = std::max<CGFloat>(100.0, w - leftMargin - rightMargin);
+  const CGFloat topMargin = insets.top;
+  const CGFloat bottomMargin = insets.bottom;
+  const CGFloat usableH = std::max<CGFloat>(100.0, h - topMargin - bottomMargin);
+
+  const CGFloat unit = std::min(usableW / 16.0, usableH / 9.0);
   const CGFloat stick = unit * 0.78, button = unit * 0.38;
   const CGFloat shoulderW = unit * 1.25, shoulderH = unit * 0.55;
-  auto P = [&](CGFloat fx, CGFloat fy) { return CGPointMake(w * fx, h * fy); };
+  auto P = [&](CGFloat fx, CGFloat fy) {
+    return CGPointMake(leftMargin + usableW * fx, topMargin + usableH * fy);
+  };
   [self setNeedsDisplay];  // a new layout: everything redrawn once
   _drawnLook.clear();
   _controls.clear();
@@ -416,13 +427,22 @@ static CGFloat TouchOpacity() {
 - (void)applyCustomLayout {
   const CGFloat w = self.bounds.size.width, h = self.bounds.size.height;
   if (w <= 0 || h <= 0) return;
+  UIEdgeInsets insets = self.window ? self.window.safeAreaInsets : self.safeAreaInsets;
+  const CGFloat maxSafeX = std::max(insets.left, insets.right);
+  const CGFloat leftMargin = maxSafeX > 0 ? (maxSafeX + 8.0) : 16.0;
+  const CGFloat rightMargin = leftMargin;
+  const CGFloat usableW = std::max<CGFloat>(100.0, w - leftMargin - rightMargin);
+  const CGFloat topMargin = insets.top;
+  const CGFloat bottomMargin = insets.bottom;
+  const CGFloat usableH = std::max<CGFloat>(100.0, h - topMargin - bottomMargin);
+
   NSDictionary* layout = [NSUserDefaults.standardUserDefaults dictionaryForKey:kLayoutKey];
   const CGFloat all = TouchSize();
   for (Control& c : _controls) {
     CGFloat scale = all;
     NSArray* v = layout[ControlIdent(_driving, c)];
     if (v.count == 3) {
-      c.center = CGPointMake(w * [v[0] doubleValue], h * [v[1] doubleValue]);
+      c.center = CGPointMake(leftMargin + usableW * [v[0] doubleValue], topMargin + usableH * [v[1] doubleValue]);
       scale *= CGFloat([v[2] doubleValue]);
     }
     c.radius *= scale;
@@ -433,9 +453,23 @@ static CGFloat TouchOpacity() {
 
 - (void)saveControl:(const Control&)c scale:(CGFloat)scale {
   const CGFloat w = self.bounds.size.width, h = self.bounds.size.height;
+  UIEdgeInsets insets = self.window ? self.window.safeAreaInsets : self.safeAreaInsets;
+  const CGFloat maxSafeX = std::max(insets.left, insets.right);
+  const CGFloat leftMargin = maxSafeX > 0 ? (maxSafeX + 8.0) : 16.0;
+  const CGFloat rightMargin = leftMargin;
+  const CGFloat usableW = std::max<CGFloat>(100.0, w - leftMargin - rightMargin);
+  const CGFloat topMargin = insets.top;
+  const CGFloat bottomMargin = insets.bottom;
+  const CGFloat usableH = std::max<CGFloat>(100.0, h - topMargin - bottomMargin);
+
+  CGFloat normX = (c.center.x - leftMargin) / usableW;
+  CGFloat normY = (c.center.y - topMargin) / usableH;
+  normX = std::clamp(normX, 0.0, 1.0);
+  normY = std::clamp(normY, 0.0, 1.0);
+
   NSMutableDictionary* layout =
       [[NSUserDefaults.standardUserDefaults dictionaryForKey:kLayoutKey] mutableCopy] ?: [NSMutableDictionary dictionary];
-  layout[ControlIdent(_driving, c)] = @[ @(c.center.x / w), @(c.center.y / h), @(scale) ];
+  layout[ControlIdent(_driving, c)] = @[ @(normX), @(normY), @(scale) ];
   [NSUserDefaults.standardUserDefaults setObject:layout forKey:kLayoutKey];
 }
 
@@ -467,7 +501,17 @@ static CGFloat TouchOpacity() {
 
 // The DRIVE layout (ergonomic racing layout with steering mode support).
 - (void)layoutDriving:(CGFloat)w height:(CGFloat)h unit:(CGFloat)unit {
-  auto P = [&](CGFloat fx, CGFloat fy) { return CGPointMake(w * fx, h * fy); };
+  UIEdgeInsets insets = self.window ? self.window.safeAreaInsets : self.safeAreaInsets;
+  const CGFloat maxSafeX = std::max(insets.left, insets.right);
+  const CGFloat leftMargin = maxSafeX > 0 ? (maxSafeX + 8.0) : 16.0;
+  const CGFloat rightMargin = leftMargin;
+  const CGFloat usableW = std::max<CGFloat>(100.0, w - leftMargin - rightMargin);
+  const CGFloat topMargin = insets.top;
+  const CGFloat bottomMargin = insets.bottom;
+  const CGFloat usableH = std::max<CGFloat>(100.0, h - topMargin - bottomMargin);
+  auto P = [&](CGFloat fx, CGFloat fy) {
+    return CGPointMake(leftMargin + usableW * fx, topMargin + usableH * fy);
+  };
   auto round = [&](NSString* l, CGPoint c, CGFloat r, int bit) {
     Control k{Kind::kRoundButton, l, c, r};
     k.bit = bit;
