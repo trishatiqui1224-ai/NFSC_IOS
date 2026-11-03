@@ -204,8 +204,8 @@ std::vector<std::string> GameArguments(const fs::path& docs, const fs::path& iso
       "--carbon_single_pass=true",
       "--nfsmw_una_pasada=false",
       "--audio_maxqframes=64",
-      "--ios_xma_starve_reset=true",
-      "--ios_utility_qos_guest=true",
+      "--ios_xma_starve_reset=false",
+      "--ios_utility_qos_guest=false",
       "--ios_utility_qos=false",
       "--anisotropic_override=16",
       "--present_effect=cas",
@@ -255,9 +255,9 @@ void ApplyUtilityQosDefault(std::vector<std::string>& args) {
     if (OptionName(arg) == "--ios_fps_cap" && arg.find('=') != std::string::npos) cap = std::atoi(arg.c_str() + arg.find('=') + 1);
   }
   const bool high_cap = cap > 60;
-  const std::pair<const char*, bool> defaults[] = {{"--ios_utility_qos", on && !high_cap},
-                                                   {"--ios_utility_qos_guest", true},
-                                                   {"--ios_adaptive_qos", !on || high_cap}};
+  const std::pair<const char*, bool> defaults[] = {{"--ios_utility_qos", false},
+                                                   {"--ios_utility_qos_guest", false},
+                                                   {"--ios_adaptive_qos", false}};
   for (const auto& [flag, value] : defaults) {
     const bool given = std::any_of(args.begin() + 1, args.end(),
                                    [&](const std::string& a) { return OptionName(a) == flag; });
@@ -477,6 +477,8 @@ int main(int argc, char* argv[]) {
 
   namespace boot = nfsmw::boot;
   boot::Open((docs / "logs" / "boot.txt").string());
+  boot::SetLogFilePath((docs / "logs" / "nfscarbon.log").string());
+  boot::SetupAltStack();
   boot::Trace("---- start, build " __DATE__ " " __TIME__);
   boot::Trace("Documents: " + docs.string());
   boot::Trace("Caches: " + caches.string());
@@ -503,8 +505,17 @@ int main(int argc, char* argv[]) {
   boot::Trace(std::string("mode: ") + (play ? "game" : "probe") +
               ((NFSCARBON_WITH_GAME || NFSMW_WITH_GAME) ? "" : " (this build has no game code)"));
 
-  // Reset any saved resolutions > 1600x720 to avoid 11-bit Xenos EDRAM overflow (max 900 tiles)
+  // One-time migration for NFS Carbon v3: overwrite persisted true values & stale Extra Args
   NSUserDefaults* defs = [NSUserDefaults standardUserDefaults];
+  if (![defs boolForKey:@"nfsc_settings_v3"]) {
+    [defs setObject:@"false" forKey:@"audio_starve_reset"];
+    [defs setObject:@"false" forKey:@"ios_xma_starve_reset"];
+    [defs setObject:@"false" forKey:@"ios_utility_qos_guest"];
+    [defs setObject:@"false" forKey:@"ios_utility_qos"];
+    [defs setObject:@"1560x720" forKey:@"carbon_scene_resolution"];
+    [defs setBool:YES forKey:@"nfsc_settings_v3"];
+    [defs synchronize];
+  }
   NSString* saved_cres = [defs stringForKey:@"carbon_scene_resolution"];
   if (saved_cres) {
     unsigned w = 0, h = 0;
@@ -521,10 +532,11 @@ int main(int argc, char* argv[]) {
       SetArgument(texts, a);
       boot::Trace("setting: " + a);
     }
-    // Enforce safe audio reset & QoS defaults for race level loads
-    SetArgument(texts, "--ios_xma_starve_reset=true");
-    SetArgument(texts, "--ios_utility_qos_guest=true");
     ApplyExtraArguments(docs / "extra_args.txt", texts);
+    // Hard-enforce safe audio reset & QoS defaults for race level loads (cannot be overridden by stale extra_args.txt)
+    SetArgument(texts, "--ios_xma_starve_reset=false");
+    SetArgument(texts, "--ios_utility_qos_guest=false");
+    SetArgument(texts, "--ios_utility_qos=false");
     // Enforce EDRAM-safe guest scene resolution (max 1560x720 / 900 tiles)
     for (auto& t : texts) {
       if (OptionName(t) == "--carbon_scene_resolution" || OptionName(t) == "--resolution") {
@@ -534,6 +546,12 @@ int main(int argc, char* argv[]) {
         }
       }
     }
+    // Deduplicate arguments so boot.txt and runtime flags have zero duplicate keys
+    std::vector<std::string> dedup_texts;
+    for (const auto& t : texts) {
+      SetArgument(dedup_texts, t);
+    }
+    texts = std::move(dedup_texts);
     if (std::find(texts.begin(), texts.end(), std::string("--log_level=off")) != texts.end()) {
       boot::Trace("logging off");
       boot::SetEnabled(false);

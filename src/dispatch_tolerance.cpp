@@ -13,6 +13,12 @@
 
 #include "carbon_missing_entries.h"
 
+#if __has_include("../ios/src/boot_trace.h")
+#include "../ios/src/boot_trace.h"
+#elif __has_include("boot_trace.h")
+#include "boot_trace.h"
+#endif
+
 #if __has_include("../generated/default/nfscarbon_pch.h")
 #include "../generated/default/nfscarbon_pch.h"
 #elif __has_include("generated/default/nfscarbon_pch.h")
@@ -48,6 +54,8 @@ CARBON_WEAK_IMPORT void __imp__HalReturnToFirmware(PPCContext& __restrict ctx, u
 CARBON_WEAK_IMPORT void __imp__KeBugCheck(PPCContext& __restrict ctx, uint8_t* base);
 CARBON_WEAK_IMPORT void __imp__KeBugCheckEx(PPCContext& __restrict ctx, uint8_t* base);
 CARBON_WEAK_IMPORT void __imp__DbgPrint(PPCContext& __restrict ctx, uint8_t* base);
+CARBON_WEAK_IMPORT void __imp__NtAllocateVirtualMemory(PPCContext& __restrict ctx, uint8_t* base);
+CARBON_WEAK_IMPORT void __imp__MmAllocatePhysicalMemoryEx(PPCContext& __restrict ctx, uint8_t* base);
 }
 
 namespace {
@@ -57,24 +65,44 @@ void LogBootBreadcrumb(const char* message) {
   if (!docs.empty()) {
     if (std::FILE* f = std::fopen((docs / "logs" / "boot.txt").string().c_str(), "a")) {
       std::fprintf(f, "%s\n", message);
+      std::fflush(f);
+      std::fclose(f);
+    }
+    if (std::FILE* f = std::fopen((docs / "logs" / "nfscarbon.log").string().c_str(), "a")) {
+      std::fprintf(f, "%s\n", message);
+      std::fflush(f);
       std::fclose(f);
     }
   }
 }
 
+inline void RecordPPCBreadcrumb(uint32_t fn, uint32_t lr, uint32_t ctr) {
+#if defined(__APPLE__)
+  nfsmw::boot::SetLastPPCBreadcrumb(fn, lr, ctr);
+#else
+  (void)fn; (void)lr; (void)ctr;
+#endif
+}
+
 thread_local uint32_t tl_last_indirect_target = 0;
 
-void RecordUnregisteredTarget(uint32_t address, uint32_t caller_lr, uint64_t tid) {
+void RecordUnregisteredTarget(uint32_t address, uint32_t caller_lr, uint64_t tid, uint32_t r3) {
   static std::mutex mutex;
   static std::set<std::pair<uint32_t, uint32_t>> seen_pairs;
   std::lock_guard<std::mutex> lock(mutex);
   if (seen_pairs.insert({address, caller_lr}).second) {
-    REXLOG_ERROR("[dispatch] UNRESOLVED INDIRECT CALL: target=0x{:08X}, lr=0x{:08X}, thread=0x{:X}",
-                 address, caller_lr, tid);
+    REXLOG_ERROR("[dispatch] UNRESOLVED INDIRECT CALL: target=0x{:08X}, lr=0x{:08X}, r3=0x{:08X}, thread=0x{:X}",
+                 address, caller_lr, r3, tid);
     rex::FlushLogging();
     if (auto logger = spdlog::default_logger()) {
       logger->flush();
     }
+
+    char breadcrumb[256];
+    std::snprintf(breadcrumb, sizeof(breadcrumb),
+                  "[dispatch] UNRESOLVED INDIRECT CALL: target=0x%08X, lr=0x%08X, r3=0x%08X, thread=0x%llX",
+                  address, caller_lr, r3, static_cast<unsigned long long>(tid));
+    LogBootBreadcrumb(breadcrumb);
 
     std::filesystem::path log_path = "unregistered_targets.txt";
     std::filesystem::path docs = rex::filesystem::GetUserFolder();
@@ -82,8 +110,8 @@ void RecordUnregisteredTarget(uint32_t address, uint32_t caller_lr, uint64_t tid
       log_path = docs / "logs" / "unregistered_targets.txt";
     }
     if (std::FILE* f = std::fopen(log_path.string().c_str(), "a")) {
-      std::fprintf(f, "0x%08X (caller lr=0x%08X, thread=0x%llX)\n",
-                   address, caller_lr, static_cast<unsigned long long>(tid));
+      std::fprintf(f, "0x%08X (caller lr=0x%08X, r3=0x%08X, thread=0x%llX)\n",
+                   address, caller_lr, r3, static_cast<unsigned long long>(tid));
       std::fclose(f);
     }
   }
@@ -102,7 +130,8 @@ void NoopTrap(PPCContext& ctx, uint8_t* /*base*/) {
   tid = static_cast<uint64_t>(pthread_self());
 #endif
 
-  RecordUnregisteredTarget(target, caller_lr, tid);
+  RecordUnregisteredTarget(target, caller_lr, tid, ctx.r3.u32);
+  RecordPPCBreadcrumb(target, caller_lr, static_cast<uint32_t>(ctx.ctr));
   ctx.r3.u64 = 0;
 }
 
@@ -113,6 +142,36 @@ static ::PPCFunc* original_return_to_firmware = nullptr;
 static ::PPCFunc* original_bug_check = nullptr;
 static ::PPCFunc* original_bug_check_ex = nullptr;
 static ::PPCFunc* original_dbg_print = nullptr;
+static ::PPCFunc* original_nt_allocate_virtual_memory = nullptr;
+static ::PPCFunc* original_mm_allocate_physical_memory_ex = nullptr;
+
+void Carbon_NtAllocateVirtualMemory_Hook(PPCContext& ctx, uint8_t* base) {
+  if (original_nt_allocate_virtual_memory) {
+    original_nt_allocate_virtual_memory(ctx, base);
+  }
+  if (static_cast<int32_t>(ctx.r3.u32) < 0) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  "[carbon-boot] NtAllocateVirtualMemory FAILED! status=0x%08X, lr=0x%08X",
+                  ctx.r3.u32, static_cast<uint32_t>(ctx.lr));
+    REXLOG_ERROR("{}", buf);
+    LogBootBreadcrumb(buf);
+  }
+}
+
+void Carbon_MmAllocatePhysicalMemoryEx_Hook(PPCContext& ctx, uint8_t* base) {
+  if (original_mm_allocate_physical_memory_ex) {
+    original_mm_allocate_physical_memory_ex(ctx, base);
+  }
+  if (ctx.r3.u32 == 0) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  "[carbon-boot] MmAllocatePhysicalMemoryEx FAILED (out of physical memory)! lr=0x%08X",
+                  static_cast<uint32_t>(ctx.lr));
+    REXLOG_ERROR("{}", buf);
+    LogBootBreadcrumb(buf);
+  }
+}
 static ::PPCFunc* original_carbon_main = nullptr;
 static ::PPCFunc* original_entry_point = nullptr;
 
@@ -391,6 +450,12 @@ void CarbonInstallDiagnosticHooks(rex::runtime::FunctionDispatcher* dispatcher, 
     { reinterpret_cast<::PPCFunc*>(&__imp__DbgPrint),
       &Carbon_DbgPrint_Hook, &original_dbg_print,
       "DbgPrint" },
+    { reinterpret_cast<::PPCFunc*>(&__imp__NtAllocateVirtualMemory),
+      &Carbon_NtAllocateVirtualMemory_Hook, &original_nt_allocate_virtual_memory,
+      "NtAllocateVirtualMemory" },
+    { reinterpret_cast<::PPCFunc*>(&__imp__MmAllocatePhysicalMemoryEx),
+      &Carbon_MmAllocatePhysicalMemoryEx_Hook, &original_mm_allocate_physical_memory_ex,
+      "MmAllocatePhysicalMemoryEx" },
   };
   for (const auto& h : kernel_hooks) {
     if (!h.imp_ptr) continue;
@@ -418,6 +483,8 @@ void CarbonInstallDiagnosticHooks(rex::runtime::FunctionDispatcher* dispatcher, 
 namespace rex::runtime {
 
 ::PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {
+  tl_last_indirect_target = guest_address;
+  RecordPPCBreadcrumb(guest_address, 0, 0);
   if (Runtime* rt = Runtime::instance()) {
     if (FunctionDispatcher* d = rt->function_dispatcher()) {
       if (::PPCFunc* f = d->GetFunction(guest_address)) {
@@ -425,7 +492,6 @@ namespace rex::runtime {
       }
     }
   }
-  tl_last_indirect_target = guest_address;
   return &NoopTrap;
 }
 

@@ -90,12 +90,21 @@ std::pair<uint32_t, uint32_t> SceneSize() {
   }
   // Enforce Xenos 11-bit EDRAM hardware limit: single-pass color tiles must not exceed 900 tiles
   // (leaving safe room for depth buffer at base 1128..2027 <= 2048 total tiles).
+  // Xenos 1x MSAA tiles are 80x16 pixels:
+  // pitch_tiles = (width + 79) / 80
+  // row_tiles   = (height + 15) / 16 (for 720p: (720 + 15) / 16 = 45 rows; 20 * 45 = 900 tiles)
   const uint32_t pitch_tiles = (width + 79) / 80;
-  const uint32_t tile_height = (height + 31) & ~31u;
-  const uint32_t rows = tile_height / 16;
-  if (pitch_tiles * rows > 900 || width > 1560 || height > 720) {
-    REXLOG_WARN("[render_mode] Requested scene resolution {}x{} exceeds 900 EDRAM tiles ({} tiles). Clamping to EDRAM-safe limit.",
-                width, height, pitch_tiles * rows);
+  const uint32_t rows = (height + 15) / 16;
+  const uint32_t total_tiles = pitch_tiles * rows;
+
+  static uint32_t s_last_warn_w = 0, s_last_warn_h = 0;
+  if (total_tiles > 900 || width > 1560 || height > 720) {
+    if (s_last_warn_w != width || s_last_warn_h != height) {
+      s_last_warn_w = width;
+      s_last_warn_h = height;
+      REXLOG_WARN("[render_mode] Requested scene resolution {}x{} exceeds 900 EDRAM tiles ({} tiles). Clamping to EDRAM-safe limit.",
+                  width, height, total_tiles);
+    }
     // If wider than 16:9 (ratio > 1.8), clamp to 1560x720 (900 tiles), else 1280x720 (720 tiles).
     if (double(width) / double(height ? height : 1) > 1.8) {
       return {1560, 720};
@@ -154,7 +163,12 @@ extern "C" REX_FUNC(sub_824FFBE0) {
     REX_STORE_U32(rect + 8, width);
     REX_STORE_U32(rect + 12, height);
   }
-  REXLOG_INFO("[render_mode] mode 2: {}x{}, 1 tile, MSAA off", width, height);
+  static uint32_t s_last_info_w = 0, s_last_info_h = 0;
+  if (s_last_info_w != width || s_last_info_h != height) {
+    s_last_info_w = width;
+    s_last_info_h = height;
+    REXLOG_INFO("[render_mode] mode 2: {}x{}, 1 tile, MSAA off", width, height);
+  }
 }
 
 // Mode select: after the original picks a mode, force mode 2.

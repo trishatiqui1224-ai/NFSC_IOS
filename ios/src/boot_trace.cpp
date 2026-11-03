@@ -21,11 +21,18 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
+
+#if defined(__APPLE__) && defined(__arm64__)
+#include <sys/ucontext.h>
+#endif
 
 #include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <exception>
@@ -35,20 +42,20 @@ namespace nfsmw::boot {
 
 namespace {
 
-std::atomic<int> g_fd{-1};
+std::atomic<int> g_boot_fd{-1};
+std::atomic<int> g_log_fd{-1};
 struct sigaction g_previous[32];
 
-void WriteRaw(const char* text, size_t length) {
-  const int fd = g_fd.load(std::memory_order_acquire);
-  if (fd < 0) {
-    return;
-  }
+thread_local uint32_t tl_last_ppc_fn = 0;
+thread_local uint32_t tl_last_ppc_lr = 0;
+thread_local uint32_t tl_last_ppc_ctr = 0;
+
+void WriteFdRaw(int fd, const char* text, size_t length) {
+  if (fd < 0 || !text || length == 0) return;
   while (length > 0) {
     const ssize_t n = write(fd, text, length);
     if (n <= 0) {
-      if (n < 0 && errno == EINTR) {
-        continue;
-      }
+      if (n < 0 && errno == EINTR) continue;
       return;
     }
     text += n;
@@ -56,18 +63,83 @@ void WriteRaw(const char* text, size_t length) {
   }
 }
 
+void WriteBothRaw(const char* text, size_t length) {
+  WriteFdRaw(g_boot_fd.load(std::memory_order_acquire), text, length);
+  WriteFdRaw(g_log_fd.load(std::memory_order_acquire), text, length);
+}
+
 // Only async-signal-safe calls in here.
 void OnSignal(int sig, siginfo_t* info, void* context) {
-  char line[96];
-  const int n = snprintf(line, sizeof(line), "FATAL signal %d (%s) at address %p\n", sig,
-                         sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS"
-                         : sig == SIGABRT ? "SIGABRT" : sig == SIGILL ? "SIGILL"
-                         : sig == SIGFPE ? "SIGFPE" : "?",
-                         info ? info->si_addr : nullptr);
-  if (n > 0) {
-    WriteRaw(line, size_t(n));
+  char buf[2048];
+  int len = 0;
+
+  const char* sig_name = "?";
+  switch (sig) {
+    case SIGSEGV: sig_name = "SIGSEGV"; break;
+    case SIGBUS:  sig_name = "SIGBUS"; break;
+    case SIGABRT: sig_name = "SIGABRT"; break;
+    case SIGILL:  sig_name = "SIGILL"; break;
+    case SIGFPE:  sig_name = "SIGFPE"; break;
+    case SIGTRAP: sig_name = "SIGTRAP"; break;
+    default: break;
   }
-  // Hand over to whoever was there before (or the default: die).
+
+  len += snprintf(buf + len, sizeof(buf) - len,
+                  "\n==================== FATAL SIGNAL %d (%s) ====================\n"
+                  "si_signo: %d, si_code: %d, faulting address: %p\n",
+                  sig, sig_name, sig, info ? info->si_code : 0, info ? info->si_addr : nullptr);
+
+#if defined(__APPLE__) && defined(__arm64__)
+  if (context) {
+    auto uctx = reinterpret_cast<ucontext_t*>(context);
+    auto mc = uctx->uc_mcontext;
+#if __DARWIN_OPAQUE_ARM_THREAD_STATE64
+    uintptr_t pc = reinterpret_cast<uintptr_t>(mc->__ss.__opaque_pc);
+    uintptr_t lr = reinterpret_cast<uintptr_t>(mc->__ss.__opaque_lr);
+    uintptr_t sp = reinterpret_cast<uintptr_t>(mc->__ss.__opaque_sp);
+    uintptr_t fp = reinterpret_cast<uintptr_t>(mc->__ss.__opaque_fp);
+#else
+    uintptr_t pc = mc->__ss.__pc;
+    uintptr_t lr = mc->__ss.__lr;
+    uintptr_t sp = mc->__ss.__sp;
+    uintptr_t fp = mc->__ss.__fp;
+#endif
+    Dl_info dlinfo{};
+    const char* img_name = "unknown";
+    uintptr_t base_addr = 0;
+    if (dladdr(reinterpret_cast<void*>(pc), &dlinfo) && dlinfo.dli_fname) {
+      img_name = dlinfo.dli_fname;
+      base_addr = reinterpret_cast<uintptr_t>(dlinfo.dli_fbase);
+    }
+    intptr_t slide = _dyld_get_image_vmaddr_slide(0);
+    len += snprintf(buf + len, sizeof(buf) - len,
+                    "ARM64 Registers:\n"
+                    "  pc: 0x%016llX (%s + 0x%llX, slide=0x%llX)\n"
+                    "  lr: 0x%016llX\n"
+                    "  sp: 0x%016llX\n"
+                    "  fp: 0x%016llX\n",
+                    static_cast<unsigned long long>(pc), img_name,
+                    static_cast<unsigned long long>(pc - base_addr),
+                    static_cast<unsigned long long>(slide),
+                    static_cast<unsigned long long>(lr),
+                    static_cast<unsigned long long>(sp),
+                    static_cast<unsigned long long>(fp));
+  }
+#endif
+
+  len += snprintf(buf + len, sizeof(buf) - len,
+                  "PPC Guest Breadcrumbs:\n"
+                  "  last_ppc_fn:  0x%08X\n"
+                  "  last_ppc_lr:  0x%08X\n"
+                  "  last_ppc_ctr: 0x%08X\n"
+                  "==============================================================\n",
+                  tl_last_ppc_fn, tl_last_ppc_lr, tl_last_ppc_ctr);
+
+  if (len > 0) {
+    WriteBothRaw(buf, size_t(len));
+  }
+
+  // Hand over to whoever was there before (or default disposition).
   const struct sigaction& prev = g_previous[sig];
   if (prev.sa_flags & SA_SIGINFO) {
     if (prev.sa_sigaction) {
@@ -93,20 +165,45 @@ void OnTerminate() {
       line += ": uncaught exception of unknown type";
     }
   }
-  Trace(line);
+  line += "\n";
+  WriteBothRaw(line.data(), line.size());
   std::abort();
 }
 
 }  // namespace
+
+void SetupAltStack() {
+  stack_t ss{};
+  void* stack_mem = std::malloc(65536);
+  if (!stack_mem) return;
+  ss.ss_sp = stack_mem;
+  ss.ss_size = 65536;
+  ss.ss_flags = 0;
+  sigaltstack(&ss, nullptr);
+}
+
+void SetLastPPCBreadcrumb(uint32_t fn_addr, uint32_t lr, uint32_t ctr) {
+  tl_last_ppc_fn = fn_addr;
+  tl_last_ppc_lr = lr;
+  tl_last_ppc_ctr = ctr;
+}
+
+void SetLogFilePath(const std::string& path) {
+  const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+  if (fd >= 0) {
+    g_log_fd.store(fd, std::memory_order_release);
+  }
+}
 
 void Open(const std::string& path) {
   const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
   if (fd < 0) {
     return;
   }
-  g_fd.store(fd, std::memory_order_release);
+  g_boot_fd.store(fd, std::memory_order_release);
+  SetupAltStack();
   std::set_terminate(OnTerminate);
-  for (int sig : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE}) {
+  for (int sig : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE, SIGTRAP}) {
     struct sigaction sa{};
     sa.sa_sigaction = OnSignal;
     sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
@@ -140,7 +237,7 @@ void Trace(const std::string& line) {
   text += tail;
   text += line;
   text += '\n';
-  WriteRaw(text.data(), text.size());
+  WriteFdRaw(g_boot_fd.load(std::memory_order_acquire), text.data(), text.size());
 }
 
 }  // namespace nfsmw::boot

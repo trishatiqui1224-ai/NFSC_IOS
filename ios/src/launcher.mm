@@ -497,8 +497,8 @@ const std::vector<Section>& Sections() {
        {
            {@"audio_starve_reset", Type::kSwitch, @"Audio stream reset",
             @"When a sound stream runs out of data, drop what it had decoded but not yet played "
-            @"(Xenia Canary's fix for stale sounds in NFS). Enforce reset during race level loads to prevent starving audio buffers.",
-            @"true"},
+            @"(Xenia Canary's fix for stale sounds in NFS). Keep off: on, 200+ resets freeze car audio cursors.",
+            @"false"},
        }, kTabAudio},
       {@"Performance", @"To test what each thing costs on your device. The defaults are the recommended ones.",
        {
@@ -639,10 +639,10 @@ NSMutableDictionary<NSString*, NSString*>* LoadSettings(const fs::path& docs) {
     SaveSettings(docs, s);
   }
   // Automatic Migration for NFS Carbon v3:
-  // Enforce audio_starve_reset to true so race transitions don't starve audio streams.
-  if (!s[@"carbon_v3_migrated"]) {
-    s[@"audio_starve_reset"] = @"true";
-    s[@"carbon_v3_migrated"] = @"true";
+  // Hard-default audio_starve_reset to false so race transitions don't kill audio streams.
+  if (!s[@"nfsc_settings_v3"]) {
+    s[@"audio_starve_reset"] = @"false";
+    s[@"nfsc_settings_v3"] = @"true";
     SaveSettings(docs, s);
   }
 
@@ -828,9 +828,8 @@ std::vector<std::string> Arguments(NSDictionary<NSString*, NSString*>* s) {
   a.push_back("--clear_memory_page_state=" + b(On(s, @"pages")));
   a.push_back("--ios_iso_stream=" + b(On(s, @"iso_stream")));
   a.push_back("--ios_xma_starve_reset=" + b(On(s, @"audio_starve_reset")));
-  a.push_back("--ios_utility_qos_guest=true");
+  a.push_back("--ios_utility_qos_guest=false");
   a.push_back("--ios_utility_qos=false");
-  a.push_back("--mnk_mode=false");
 
   // Backend selection: Lock Vulkan backend for NFS Carbon
   a.push_back("--gpu_backend=vulkan");

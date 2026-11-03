@@ -1,6 +1,7 @@
 # ============================================================================
 #  Need for Speed: Carbon (Xbox 360, Title ID: 454107EC) Recomp Overrides
 #  Manual function declarations and bounds for ReXGlue ahead-of-time codegen
+#  Configured for USA XEX (Title ID: 454107EC, Media ID: 529367F4)
 # ============================================================================
 
 cr_as_local = false
@@ -9,31 +10,31 @@ ctr_as_local = false
 non_volatile_as_local = false
 
 [functions]
-# Branch targets with unresolved function boundaries in automatic discovery
-# b 0x82A65510 at 0x82A65974
-"0x82A65510" = { }
+# Branch targets with unresolved function boundaries in automatic discovery (USA XEX)
+"0x823217D0" = { }
+"0x82A63408" = { }
+"0x82A66790" = { }
 
-# b 0x82321850 at 0x823002A8
-"0x82321850" = { }
+# Entrypoint called indirectly during resource initialization (USA Frontend init callback)
+"0x824DA968" = { }
 
-# b 0x82A62188 at 0x82A62FBC
-"0x82A62188" = { }
+# Setup sequence called during Car Selection / Quick Race level transitions
+"0x825BF728" = { }
 
-# Entrypoint called indirectly during resource initialization
-# Sits after the four-instruction thunk at 0x824DAA90
-"0x824DAAA0" = { }
+# State machine dispatcher entry (USA equivalent of PAL 0x82296468)
+"0x82296388" = { }
 
-# Setup sequence called when entering Career mode
-"0x825BF6A0" = { }
+# Story mode object resource update entry (USA equivalent of PAL 0x822A9490)
+"0x822A93B0" = { }
 
-# State machine dispatcher entry
-"0x82296468" = { }
+# Adjustor thunk (USA equivalent of PAL 0x82641480)
+"0x8216D770" = { }
 
-# Story mode object resource update entry
-"0x822A9490" = { }
+# Virtual dispatch fallback entry (USA equivalent of PAL 0x82322048)
+"0x82321FC8" = { }
 
-# Adjustor thunk
-"0x82641480" = { }
+# Flasher callback / thunk called from 0x82690F0C
+"0x821A3EC8" = { }
 
-# Virtual dispatch fallback entry
-"0x82322048" = { }
+# Standalone blr stub
+"0x823503D0" = { }
