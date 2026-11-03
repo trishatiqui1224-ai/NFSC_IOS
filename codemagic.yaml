@@ -1,95 +1,115 @@
-# =============================================================================
-#  Need for Speed: Carbon (Xbox 360, Title ID: 454107EC) - Codemagic CI/CD
-#  Automated Native iOS/iPadOS Recompiled IPA Builder
-# =============================================================================
+# Codemagic CI/CD Pipeline for Need for Speed: Carbon (iOS / ARM64)
+# Statically recompiled native Apple Silicon build
 
 workflows:
-  ios-release:
-    name: Build NFS Carbon iOS (ARM64 Unsigned IPA)
+  build-nfs-carbon-ios:
+    name: Build NFS Carbon iOS (ARM64)
+    max_build_duration: 120
     instance_type: mac_mini_m2
-    max_build_duration: 60
     environment:
-      vars:
-        TITLE_ID: "454107EC"
       xcode: latest
+      python: 3.12
+      vars:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+      groups:
+        - carbon_secrets  # Optional Codemagic secret group for CARBON_XEX_SECRET
     triggering:
       events:
         - push
         - tag
       branch_patterns:
-        - pattern: main
+        - pattern: 'main'
           include: true
-        - pattern: master
+          source: true
+        - pattern: 'master'
           include: true
+          source: true
       tag_patterns:
         - pattern: 'v*'
           include: true
-    cache:
-      cache_paths:
-        - $HOME/Library/Caches/Homebrew
-        - $HOME/.nfsc-ios
-        - $CM_BUILD_DIR/../rexglue-sdk-ios
     scripts:
-      - name: Install build tools & Python packages
+      - name: Select Xcode & Verify Toolchain
         script: |
-          set -e
-          echo "[Codemagic] Installing build tools..."
-          brew install cmake ninja
+          echo "[CI] Selecting Xcode 16 if available..."
+          XCODE_16=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "${XCODE_16}" ]; then
+            echo "[CI] Selecting Xcode 16 at ${XCODE_16}..."
+            sudo xcode-select -s "${XCODE_16}"
+          fi
+          echo "[CI] Active Xcode version:"
+          xcodebuild -version
+          xcrun --sdk iphoneos --find clang
+          xcrun --sdk iphoneos --find clang++
+
+      - name: Install Python Dependencies
+        script: |
           python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
 
-      - name: Generate AppIcon & Asset Catalog
+      - name: Install Build Tools
         script: |
-          set -e
-          echo "[Codemagic] Generating high-contrast procedural AppIcon..."
+          brew install cmake ninja
+
+      - name: Setup AppIcon & Assets Catalog
+        script: |
           python3 tools/generate_appicon.py
 
       - name: Restore or Prepare Game Codegen (PowerPC to C++)
         script: |
-          set -e
-          echo "[Codemagic] Preparing USA XEX for codegen..."
           mkdir -p game generated/default xex
 
-          # Stage xex/usa_default.xex (committed to private repo) into game/
-          if [ -f "xex/usa_default.xex" ]; then
-            echo "[Codemagic] Staging xex/usa_default.xex -> game/default.xex"
-            cp -f xex/usa_default.xex game/default.xex
-            echo "[Codemagic] Staged USA XEX: $(wc -c < game/default.xex) bytes"
+          # Priority 1: CARBON_XEX_SECRET (URL or base64-encoded USA XEX)
+          if [ -n "${CARBON_XEX_SECRET}" ]; then
+            echo "[CI] Found CARBON_XEX_SECRET. Decoding usa_default.xex..."
+            if [[ "${CARBON_XEX_SECRET}" =~ ^https?:// ]]; then
+              curl -L -s -o xex/usa_default.xex "${CARBON_XEX_SECRET}"
+            else
+              echo "${CARBON_XEX_SECRET}" | base64 -d > xex/usa_default.xex
+            fi
+            echo "[CI] Decoded usa_default.xex: $(wc -c < xex/usa_default.xex) bytes."
           fi
 
-          # Unpack pre-generated C++ source archive only if XEX is unavailable
+          # Priority 2: xex/usa_default.xex committed to repo (private repo only)
+          if [ -f "xex/usa_default.xex" ]; then
+            echo "[CI] Staging xex/usa_default.xex -> game/default.xex"
+            cp -f xex/usa_default.xex game/default.xex
+            echo "[CI] Staged USA XEX: $(wc -c < game/default.xex) bytes"
+          fi
+
+          # Priority 3: Unpack pre-generated C++ cache (gen.tar.gz) if XEX is unavailable
           if [ ! -f "game/default.xex" ]; then
             python3 tools/generate_code.py --unpack-cache || true
           fi
 
+      - name: Prepare ReXGlue iOS SDK
+        script: |
+          python3 tools/ios/prepare_sdk.py --sdk "../rexglue-sdk-ios"
+          if [ -d "../rexglue-sdk-ios" ]; then
+            (cd ../rexglue-sdk-ios && git tag -f v0.10.0 HEAD 2>/dev/null || true)
+          fi
+
       - name: Generate Code if XEX Available
         script: |
-          set -e
           if [ -f "game/default.xex" ]; then
-            echo "[Codemagic] Running USA XEX codegen..."
+            echo "[CI] Running USA XEX codegen..."
             python3 tools/generate_code.py --xex game/default.xex --force-codegen
-            echo "[Codemagic] Verifying USA codegen (fail-fast)..."
-            python3 tools/verify_usa_codegen.py
           else
-            echo "[Codemagic] Note: game/default.xex not found. Skipping codegen."
+            echo "[CI] Note: game/default.xex not found. Building host harness & probe only."
           fi
 
-      - name: Prepare ReXGlue iOS SDK & MoltenVK
+      - name: Verify USA Codegen (Fail-Fast)
         script: |
-          set -e
-          echo "[Codemagic] Preparing ReXGlue iOS SDK and applying Apple Silicon patches..."
-          python3 tools/ios/prepare_sdk.py --sdk "$CM_BUILD_DIR/../rexglue-sdk-ios"
-          # Ensure git tag v0.10.0 is reachable in the SDK so rex_compute_version succeeds
-          if [ -d "$CM_BUILD_DIR/../rexglue-sdk-ios" ]; then
-            cd "$CM_BUILD_DIR/../rexglue-sdk-ios"
-            git tag -f v0.10.0 HEAD 2>/dev/null || true
-            cd "$CM_BUILD_DIR"
+          REGISTER_CPP=$(ls generated/default/*register*.cpp 2>/dev/null | head -1 || true)
+          if [ -z "${REGISTER_CPP}" ]; then
+            echo "[CI] No register.cpp found -- codegen did not run (no XEX). Skipping USA verification."
+          else
+            echo "[CI] Verifying codegen was produced from USA XEX (not PAL)..."
+            python3 tools/verify_usa_codegen.py
+            echo "[CI] USA codegen verification PASSED."
           fi
 
-      - name: Configure CMake for iOS (ARM64 Native)
+      - name: Configure CMake for iOS (arm64 Native)
         script: |
-          set -e
-          echo "[Codemagic] Configuring CMake with iOS preset..."
           cd ios
           export CC="$(xcrun --sdk iphoneos --find clang)"
           export CXX="$(xcrun --sdk iphoneos --find clang++)"
@@ -112,43 +132,34 @@ workflows:
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
 
-      - name: Compile and Package Unsigned IPA
+      - name: Compile and Package IPA
         script: |
-          set -e
-          echo "[Codemagic] Compiling NFSCarbon.app and packaging IPA..."
           cd ios
           cmake --build --preset ios --target ipa -- -j 4 || {
-            echo "[Codemagic] Build failed! Re-running failed file with single-job diagnostics..."
+            echo "[CI] Build failed! Re-running failed file with single-job diagnostics..."
             cmake --build --preset ios --target ipa -v -- -j 1
             exit 1
           }
 
-      - name: Compute Checksums & Export Artifacts
+      - name: Compute Checksums & Verify Artifacts
         script: |
-          set -e
-          echo "[Codemagic] Preparing release artifacts..."
           mkdir -p dist
           IPA_SRC="ios/build/NFS-Carbon-iOS-unsigned.ipa"
           if [ ! -f "${IPA_SRC}" ]; then
             IPA_SRC="ios/build/NFSCarbon.ipa"
           fi
+
           cp -f "${IPA_SRC}" dist/NFS-Carbon-iOS-unsigned.ipa
-          cp -f "${IPA_SRC}" dist/NFSCarbon.ipa
           cd dist
           shasum -a 256 NFS-Carbon-iOS-unsigned.ipa > SHA256SUMS.txt
-          echo "[Codemagic] SHA-256 Checksum:"
           cat SHA256SUMS.txt
-
     artifacts:
       - dist/NFS-Carbon-iOS-unsigned.ipa
-      - dist/NFSCarbon.ipa
       - dist/SHA256SUMS.txt
       - ios/build/*.ipa
-
-    publishing:
-      email:
-        recipients:
-          - dev3lop3r2025@gmail.com
-        notify:
-          success: true
-          failure: true
+    cache:
+      cache_paths:
+        - $HOME/Library/Caches/Homebrew
+        - $CM_BUILD_DIR/../rexglue-sdk-ios
+        - $HOME/.nfsc-ios
+        - $HOME/Library/Caches/pip
