@@ -117,10 +117,43 @@ void RecordUnregisteredTarget(uint32_t address, uint32_t caller_lr, uint64_t tid
   }
 }
 
-void NoopTrap(PPCContext& ctx, uint8_t* /*base*/) {
+void NoopTrap(PPCContext& ctx, uint8_t* base) {
   const uint32_t target = ctx.last_indirect_target ? static_cast<uint32_t>(ctx.last_indirect_target)
                                                    : tl_last_indirect_target;
-  const uint32_t caller_lr = static_cast<uint32_t>(ctx.lr);
+  if (!target || target < 0x82000000) {
+    SPDLOG_ERROR("[core] [dispatch] CAUGHT NULL/INVALID INDIRECT TARGET: 0x{0:X}", target);
+    char breadcrumb[128];
+    std::snprintf(breadcrumb, sizeof(breadcrumb),
+                  "[core] [dispatch] CAUGHT NULL/INVALID INDIRECT TARGET: 0x%X", target);
+    LogBootBreadcrumb(breadcrumb);
+    ctx.r3.u64 = 0;
+    return;
+  }
+
+  uint32_t caller_lr = static_cast<uint32_t>(ctx.lr);
+  if (caller_lr == 0 && base) {
+    const uint32_t sp = ctx.r1.u32;
+    if (sp >= 0x70000000u && sp < 0x80000000u && (sp & 3) == 0) {
+      uint32_t v;
+      std::memcpy(&v, base + sp, 4);
+      const uint32_t up = __builtin_bswap32(v);
+      if (up > sp && up - sp <= 0x40000 && up < 0x80000000u) {
+        uint32_t saved_lr_raw;
+        std::memcpy(&saved_lr_raw, base + up - 8, 4);
+        const uint32_t candidate_lr = __builtin_bswap32(saved_lr_raw);
+        if (candidate_lr >= 0x82000000u && candidate_lr < 0x82B40000u) {
+          caller_lr = candidate_lr;
+        } else {
+          std::memcpy(&saved_lr_raw, base + up + 8, 4);
+          const uint32_t candidate_lr2 = __builtin_bswap32(saved_lr_raw);
+          if (candidate_lr2 >= 0x82000000u && candidate_lr2 < 0x82B40000u) {
+            caller_lr = candidate_lr2;
+          }
+        }
+      }
+    }
+  }
+
   uint64_t tid = 0;
 #if defined(__APPLE__)
   pthread_threadid_np(nullptr, &tid);
@@ -483,6 +516,17 @@ void CarbonInstallDiagnosticHooks(rex::runtime::FunctionDispatcher* dispatcher, 
 namespace rex::runtime {
 
 ::PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {
+  if (!guest_address || guest_address < 0x82000000) {
+    SPDLOG_ERROR("[core] [dispatch] CAUGHT NULL/INVALID INDIRECT TARGET: 0x{0:X}", guest_address);
+    char breadcrumb[128];
+    std::snprintf(breadcrumb, sizeof(breadcrumb),
+                  "[core] [dispatch] CAUGHT NULL/INVALID INDIRECT TARGET: 0x%X", guest_address);
+    LogBootBreadcrumb(breadcrumb);
+    tl_last_indirect_target = guest_address;
+    RecordPPCBreadcrumb(guest_address, 0, 0);
+    return &NoopTrap;
+  }
+
   tl_last_indirect_target = guest_address;
   RecordPPCBreadcrumb(guest_address, 0, 0);
   if (Runtime* rt = Runtime::instance()) {
