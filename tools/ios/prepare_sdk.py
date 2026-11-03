@@ -174,6 +174,36 @@ def safeguard_rex_version(sdk):
             print("  [ok] Safeguarded rex_version.cmake (clean 0.10.0 fallback)")
 
 
+def safeguard_fpscr(sdk):
+    """Fix ARM64 inline-asm operand width warning in rex/platform/fpscr.h (cast csr to uint64_t)."""
+    for sub in [
+        sdk / "include" / "rex" / "platform" / "fpscr.h",
+        sdk / "src" / "rex" / "platform" / "fpscr.h",
+    ]:
+        if sub.exists():
+            txt = sub.read_text(encoding="utf-8")
+            orig = txt
+            old_setcsr = 'static inline void setcsr(u32 csr) noexcept {\n  __asm__ __volatile__("msr fpcr, %0" : : "r"(csr));\n}'
+            new_setcsr = 'static inline void setcsr(u32 csr) noexcept {\n  uint64_t v = csr;\n  __asm__ __volatile__("msr fpcr, %0" : : "r"(v));\n}'
+            if old_setcsr in txt:
+                txt = txt.replace(old_setcsr, new_setcsr)
+            elif '__asm__ __volatile__("msr fpcr, %0" : : "r"(csr));' in txt:
+                txt = txt.replace(
+                    '__asm__ __volatile__("msr fpcr, %0" : : "r"(csr));',
+                    'uint64_t v = csr; __asm__ __volatile__("msr fpcr, %0" : : "r"(v));'
+                )
+            elif 'msr fpcr, %0' in txt and 'uint64_t v = csr' not in txt:
+                import re
+                txt = re.sub(
+                    r'(static\s+inline\s+void\s+setcsr\s*\([^)]*\)\s*(?:noexcept)?\s*\{)([^}]*__asm__\s*__volatile__\s*\(\s*"msr\s+fpcr,\s*%0"\s*:\s*:\s*"r"\()(\w+)(\)\s*\);)',
+                    r'\1 uint64_t v = \3; \2v\4',
+                    txt
+                )
+            if txt != orig:
+                sub.write_text(txt, encoding="utf-8")
+                print(f"  [ok] Safeguarded {sub.relative_to(sdk)} (msr fpcr uint64_t operand)")
+
+
 def moltenvk(sdk):
     dest = sdk / ".nfsc-ios" / "MoltenVK"
     marker = dest / (MOLTENVK_VERSION + ".ready")
@@ -300,6 +330,7 @@ def main():
     step(6, "Extra safeguards")
     safeguard_vulkan_loader(sdk)
     safeguard_rex_version(sdk)
+    safeguard_fpscr(sdk)
     ensure_git_tags(sdk)
 
     print(f"\n[ok] SDK ready in {sdk}")

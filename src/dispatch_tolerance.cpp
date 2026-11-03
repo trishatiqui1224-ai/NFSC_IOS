@@ -131,7 +131,7 @@ void NoopTrap(PPCContext& ctx, uint8_t* /*base*/) {
 #endif
 
   RecordUnregisteredTarget(target, caller_lr, tid, ctx.r3.u32);
-  RecordPPCBreadcrumb(target, caller_lr, static_cast<uint32_t>(ctx.ctr));
+  RecordPPCBreadcrumb(target, caller_lr, ctx.ctr.u32);
   ctx.r3.u64 = 0;
 }
 
