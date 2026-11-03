@@ -247,7 +247,10 @@ set_target_properties(nfscarbon PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info.plist"
     INSTALL_RPATH "@loader_path/Frameworks")
 
-target_compile_options(nfscarbon PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+target_compile_options(nfscarbon PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+    $<$<CXX_COMPILER_ID:Clang,AppleClang>:-gline-tables-only>
+)
 target_include_directories(nfscarbon PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${NFSCARBON_REPO}"

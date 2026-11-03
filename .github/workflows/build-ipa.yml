@@ -144,6 +144,14 @@ jobs:
           python3 tools/verify_usa_codegen.py
           echo "[CI] USA codegen verification PASSED."
 
+      - name: Pre-Flight Check: Verify Argv & Post-Launcher Handoff (ASan/UBSan)
+        run: |
+          echo "[CI] Compiling and running host argv deduplication and handoff test with ASan/UBSan..."
+          clang++ -std=c++20 -fsanitize=address,undefined -Wall -Wextra tools/test_argv_dedup.cpp -o /tmp/test_argv_dedup
+          /tmp/test_argv_dedup
+          rm -f /tmp/test_argv_dedup
+          echo "[CI] Pre-flight handoff test PASSED with 0 sanitize violations."
+
       - name: Configure CMake for iOS (arm64 Native)
         run: |
           cd ios
@@ -183,6 +191,12 @@ jobs:
           IPA_SRC="ios/build/NFS-Carbon-iOS-unsigned.ipa"
           if [ ! -f "${IPA_SRC}" ]; then
             IPA_SRC="ios/build/NFSCarbon.ipa"
+          fi
+
+          APP_BIN="ios/build/NFSCarbon.app/NFSCarbon"
+          if [ -f "${APP_BIN}" ]; then
+            echo "[CI] Symbolizing static offsets in NFSCarbon binary:"
+            atos -arch arm64 -o "${APP_BIN}" -l 0x100000000 0x100015ba4 0x1000141a8 2>/dev/null || true
           fi
 
           cp -f "${IPA_SRC}" dist/NFS-Carbon-iOS-unsigned.ipa

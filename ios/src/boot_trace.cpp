@@ -104,24 +104,42 @@ void OnSignal(int sig, siginfo_t* info, void* context) {
     uintptr_t sp = mc->__ss.__sp;
     uintptr_t fp = mc->__ss.__fp;
 #endif
-    Dl_info dlinfo{};
-    const char* img_name = "unknown";
-    uintptr_t base_addr = 0;
-    if (dladdr(reinterpret_cast<void*>(pc), &dlinfo) && dlinfo.dli_fname) {
-      img_name = dlinfo.dli_fname;
-      base_addr = reinterpret_cast<uintptr_t>(dlinfo.dli_fbase);
+    Dl_info pc_info{};
+    const char* pc_img = "unknown";
+    const char* pc_sym = "?";
+    uintptr_t pc_base = 0;
+    uintptr_t pc_saddr = 0;
+    if (dladdr(reinterpret_cast<void*>(pc), &pc_info)) {
+      if (pc_info.dli_fname) pc_img = pc_info.dli_fname;
+      pc_base = reinterpret_cast<uintptr_t>(pc_info.dli_fbase);
+      if (pc_info.dli_sname) pc_sym = pc_info.dli_sname;
+      pc_saddr = reinterpret_cast<uintptr_t>(pc_info.dli_saddr);
+    }
+    Dl_info lr_info{};
+    const char* lr_img = "unknown";
+    const char* lr_sym = "?";
+    uintptr_t lr_base = 0;
+    uintptr_t lr_saddr = 0;
+    if (dladdr(reinterpret_cast<void*>(lr), &lr_info)) {
+      if (lr_info.dli_fname) lr_img = lr_info.dli_fname;
+      lr_base = reinterpret_cast<uintptr_t>(lr_info.dli_fbase);
+      if (lr_info.dli_sname) lr_sym = lr_info.dli_sname;
+      lr_saddr = reinterpret_cast<uintptr_t>(lr_info.dli_saddr);
     }
     intptr_t slide = _dyld_get_image_vmaddr_slide(0);
     len += snprintf(buf + len, sizeof(buf) - len,
                     "ARM64 Registers:\n"
-                    "  pc: 0x%016llX (%s + 0x%llX, slide=0x%llX)\n"
-                    "  lr: 0x%016llX\n"
+                    "  pc: 0x%016llX (%s + 0x%llX [%s + 0x%llX], slide=0x%llX)\n"
+                    "  lr: 0x%016llX (%s + 0x%llX [%s + 0x%llX])\n"
                     "  sp: 0x%016llX\n"
                     "  fp: 0x%016llX\n",
-                    static_cast<unsigned long long>(pc), img_name,
-                    static_cast<unsigned long long>(pc - base_addr),
+                    static_cast<unsigned long long>(pc), pc_img,
+                    static_cast<unsigned long long>(pc - pc_base),
+                    pc_sym, static_cast<unsigned long long>(pc_saddr ? (pc - pc_saddr) : 0),
                     static_cast<unsigned long long>(slide),
-                    static_cast<unsigned long long>(lr),
+                    static_cast<unsigned long long>(lr), lr_img,
+                    static_cast<unsigned long long>(lr - lr_base),
+                    lr_sym, static_cast<unsigned long long>(lr_saddr ? (lr - lr_saddr) : 0),
                     static_cast<unsigned long long>(sp),
                     static_cast<unsigned long long>(fp));
   }

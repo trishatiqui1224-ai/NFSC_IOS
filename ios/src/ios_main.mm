@@ -233,10 +233,20 @@ std::string OptionName(const std::string& arg) {
 // Puts `arg` in `args`, replacing any argument with the same option name
 // (args[0] is the program name).
 void SetArgument(std::vector<std::string>& args, const std::string& arg) {
+  if (args.empty()) {
+    args.push_back(arg);
+    return;
+  }
   const std::string name = OptionName(arg);
-  args.erase(std::remove_if(args.begin() + 1, args.end(),
-                            [&](const std::string& x) { return OptionName(x) == name; }),
-             args.end());
+  // Only replace flags starting with '--'; keep args[0] (program name) untouched.
+  if (name.rfind("--", 0) == 0) {
+    for (size_t i = 1; i < args.size(); ++i) {
+      if (OptionName(args[i]) == name) {
+        args[i] = arg;
+        return;
+      }
+    }
+  }
   args.push_back(arg);
 }
 
@@ -249,24 +259,20 @@ void ApplyUtilityQosDefault(std::vector<std::string>& args) {
   size_t size = sizeof(cores);
   if (sysctlbyname("hw.perflevel1.physicalcpu", &cores, &size, nullptr, 0) != 0) cores = 0;
   utility_qos_efficiency_cores = cores;
-  const bool on = cores >= 6;
   int cap = 60;
   for (const auto& arg : args) {
-    if (OptionName(arg) == "--ios_fps_cap" && arg.find('=') != std::string::npos) cap = std::atoi(arg.c_str() + arg.find('=') + 1);
+    if (OptionName(arg) == "--ios_fps_cap" && arg.find('=') != std::string::npos) {
+      cap = std::atoi(arg.c_str() + arg.find('=') + 1);
+    }
   }
-  const bool high_cap = cap > 60;
   const std::pair<const char*, bool> defaults[] = {{"--ios_utility_qos", false},
                                                    {"--ios_utility_qos_guest", false},
                                                    {"--ios_adaptive_qos", false}};
   for (const auto& [flag, value] : defaults) {
-    const bool given = std::any_of(args.begin() + 1, args.end(),
-                                   [&](const std::string& a) { return OptionName(a) == flag; });
-    if (given) {
-      utility_qos_source = "Extra Args";
-    } else {
-      SetArgument(args, std::string(flag) + (value ? "=true" : "=false"));
-    }
+    // Hard-default false for utility QoS to prevent guest thread starvation (overriding any stale extra_args)
+    SetArgument(args, std::string(flag) + (value ? "=true" : "=false"));
   }
+  utility_qos_source = "default (safe false)";
 }
 
 // Documents/extra_args.txt: one argument per line; blank lines and lines
@@ -328,10 +334,19 @@ int RunGame(int argc, char* argv[], const fs::path& docs) {
   namespace boot = nfsmw::boot;
   rex::audio::ios::PrepareAudioSession();
   boot::Trace("game: parsing the arguments");
-  std::vector<std::string> experiment_args(argv, argv + argc);
+  std::vector<std::string> experiment_args;
+  experiment_args.reserve(argc > 0 ? argc : 0);
+  for (int i = 0; i < argc; ++i) {
+    if (argv && argv[i]) {
+      experiment_args.emplace_back(argv[i]);
+    }
+  }
   ApplyUtilityQosDefault(experiment_args);
   std::vector<char*> experiment_argv;
-  for (auto& arg : experiment_args) experiment_argv.push_back(arg.data());
+  experiment_argv.reserve(experiment_args.size() + 1);
+  for (auto& arg : experiment_args) {
+    experiment_argv.push_back(arg.data());
+  }
   experiment_argv.push_back(nullptr);
   auto leftovers = rex::cvar::Init(int(experiment_args.size()), experiment_argv.data());
   rex::cvar::ApplyEnvironment();
@@ -414,13 +429,18 @@ int RunGame(int argc, char* argv[], const fs::path& docs) {
 int RunProbe(int argc, char* argv[], const fs::path& docs) {
   const fs::path caches = CachesFolder();
   std::vector<std::string> probe_args;
-  probe_args.push_back(argc > 0 ? argv[0] : "nfscarbon");
+  probe_args.push_back((argc > 0 && argv && argv[0]) ? argv[0] : "nfscarbon");
   probe_args.push_back("--user_data_root=" + (docs / "data").string());
   probe_args.push_back("--cache_root=" + (caches / "rexglue").string());
   probe_args.push_back("--log_file=" + (docs / "logs" / "nfscarbon.log").string());
   probe_args.push_back("--log_level=info");
-  for (int i = 1; i < argc; ++i) probe_args.push_back(argv[i]);
+  for (int i = 1; i < argc; ++i) {
+    if (argv && argv[i]) {
+      probe_args.emplace_back(argv[i]);
+    }
+  }
   std::vector<char*> probe_argv;
+  probe_argv.reserve(probe_args.size() + 1);
   for (auto& a : probe_args) probe_argv.push_back(a.data());
   probe_argv.push_back(nullptr);
 
@@ -548,10 +568,13 @@ int main(int argc, char* argv[]) {
     }
     // Deduplicate arguments so boot.txt and runtime flags have zero duplicate keys
     std::vector<std::string> dedup_texts;
-    for (const auto& t : texts) {
-      SetArgument(dedup_texts, t);
+    if (!texts.empty()) {
+      dedup_texts.push_back(texts.front());
+      for (size_t i = 1; i < texts.size(); ++i) {
+        SetArgument(dedup_texts, texts[i]);
+      }
+      texts = std::move(dedup_texts);
     }
-    texts = std::move(dedup_texts);
     if (std::find(texts.begin(), texts.end(), std::string("--log_level=off")) != texts.end()) {
       boot::Trace("logging off");
       boot::SetEnabled(false);
@@ -561,11 +584,12 @@ int main(int argc, char* argv[]) {
     texts.push_back("--log_level=info");
   }
   std::vector<char*> args;
+  args.reserve(texts.size() + 1);
   for (auto& t : texts) {
     args.push_back(t.data());
   }
   args.push_back(nullptr);
-  const int n = static_cast<int>(args.size()) - 1;
+  const int n = static_cast<int>(texts.size());
 
 #if NFSMW_WITH_GAME
   if (play) {

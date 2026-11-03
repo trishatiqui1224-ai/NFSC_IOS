@@ -141,24 +141,26 @@ constexpr std::array<uint32_t, 19> kOriginal_82321FC8 = {
 
 void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
                                   uint8_t* base) {
-  // Dedicated verified blr stub for 0x823503D0 (single-instruction return):
-  constexpr uint32_t blr_stub = 0x823503D0;
-  if (!dispatcher->GetFunction(blr_stub)) {
-    if (REX_LOAD_U32(blr_stub) == 0x4E800020) {
-      if (dispatcher->SetFunction(blr_stub, &Carbon_Blr)) {
-        REXLOG_INFO("[carbon] Registered verified blr stub 0x823503D0");
-      }
-    }
-  }
-
-  // Scan strictly for verified 8-instruction member-callback adapters.
-  // Blanket registration of 56,548 blr instructions has been REMOVED so epilogues
-  // and tail calls are never falsely shadowed or return uninitialized r3 values.
+  // Boot reached an unregistered 0x823503D0 consisting solely of `blr`.
+  // Any indirect entry whose actual first instruction is unconditional `blr`
+  // has exactly these semantics, including entry directly at an epilogue.
+  // Preserve existing generated functions; never replace an existing compiled function.
+  size_t return_entries = 0;
   size_t member_adapters = 0;
   size_t skipped_entries = 0;
   for (uint32_t entry = PPCImageConfig.code_base;
-       entry + kMemberAdapter.size() * 4 <= PPCImageConfig.code_base + PPCImageConfig.code_size; entry += 4) {
-    if (REX_LOAD_U32(entry) == kMemberAdapter[0]) {
+       entry < PPCImageConfig.code_base + PPCImageConfig.code_size; entry += 4) {
+    if (REX_LOAD_U32(entry) == 0x4E800020) {
+      if (dispatcher->GetFunction(entry)) {
+        ++skipped_entries;
+      } else {
+        if (!dispatcher->SetFunction(entry, &Carbon_Blr))
+          REX_FATAL("Could not register original Carbon return instruction");
+        ++return_entries;
+      }
+    }
+    if (REX_LOAD_U32(entry) == kMemberAdapter[0] &&
+        entry + kMemberAdapter.size() * 4 <= PPCImageConfig.code_base + PPCImageConfig.code_size) {
       if (dispatcher->GetFunction(entry)) {
         ++skipped_entries;
       } else {
@@ -177,8 +179,9 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
       }
     }
   }
-  REXLOG_INFO("[carbon] Registered {} verified member adapters ({} existing skipped)",
-              member_adapters, skipped_entries);
+  REXLOG_INFO("[carbon] Registered {} original blr entries ({} existing compiled functions skipped)",
+              return_entries, skipped_entries);
+  REXLOG_INFO("[carbon] Registered {} verified member adapters", member_adapters);
   if (auto logger = spdlog::default_logger()) {
     logger->flush();
   }
