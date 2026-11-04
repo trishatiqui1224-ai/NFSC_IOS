@@ -135,8 +135,6 @@ MEM_NUEVO_INC = """#include <rex/system/xmemory.h>
 #include <rex/thread.h>
 #if defined(__APPLE__) || defined(__linux__)
 #include <dlfcn.h>
-extern "C" uintptr_t g_last_host_fault_pc __attribute__((weak));
-extern "C" size_t CarbonFormatLastPPCBreadcrumbs(char* buf, size_t buf_size) __attribute__((weak));
 #endif
 """
 
@@ -206,18 +204,22 @@ MEM_NUEVO = """    REXSYS_ERROR(
               c.r3.u32, c.r4.u32, c.r5.u32, c.r6.u32, c.r7.u32, c.r11.u32, c.r12.u32, c.r30.u32,
               c.r31.u32);
 #if defined(__APPLE__) || defined(__linux__)
-          if (&g_last_host_fault_pc && g_last_host_fault_pc) {
+          auto* p_fault_pc = reinterpret_cast<uintptr_t*>(dlsym(RTLD_DEFAULT, "g_last_host_fault_pc"));
+          if (p_fault_pc && *p_fault_pc) {
+            const uintptr_t fault_pc = *p_fault_pc;
             Dl_info dlinfo{};
-            if (dladdr(reinterpret_cast<void*>(g_last_host_fault_pc), &dlinfo) && dlinfo.dli_sname) {
-              const uintptr_t off = g_last_host_fault_pc - reinterpret_cast<uintptr_t>(dlinfo.dli_saddr);
-              REXSYS_ERROR("  [host pc] 0x{:016X} ({}+0x{:X})", g_last_host_fault_pc, dlinfo.dli_sname, off);
+            if (dladdr(reinterpret_cast<void*>(fault_pc), &dlinfo) && dlinfo.dli_sname) {
+              const uintptr_t off = fault_pc - reinterpret_cast<uintptr_t>(dlinfo.dli_saddr);
+              REXSYS_ERROR("  [host pc] 0x{:016X} ({}+0x{:X})", fault_pc, dlinfo.dli_sname, off);
             } else {
-              REXSYS_ERROR("  [host pc] 0x{:016X}", g_last_host_fault_pc);
+              REXSYS_ERROR("  [host pc] 0x{:016X}", fault_pc);
             }
           }
-          if (&CarbonFormatLastPPCBreadcrumbs && CarbonFormatLastPPCBreadcrumbs) {
+          using FnCarbonBreadcrumbs = size_t (*)(char*, size_t);
+          auto fnBreadcrumbs = reinterpret_cast<FnCarbonBreadcrumbs>(dlsym(RTLD_DEFAULT, "CarbonFormatLastPPCBreadcrumbs"));
+          if (fnBreadcrumbs) {
             char bbuf[1024];
-            CarbonFormatLastPPCBreadcrumbs(bbuf, sizeof(bbuf));
+            fnBreadcrumbs(bbuf, sizeof(bbuf));
             REXSYS_ERROR("{}", bbuf);
           }
 #endif
