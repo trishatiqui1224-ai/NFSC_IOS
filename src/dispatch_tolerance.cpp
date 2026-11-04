@@ -77,11 +77,11 @@ void LogBootBreadcrumb(const char* message) {
   }
 }
 
-inline void RecordPPCBreadcrumb(uint32_t fn, uint32_t lr, uint32_t ctr) {
+inline void RecordPPCBreadcrumb(uint32_t fn, uint32_t lr, uint32_t r3) {
 #if defined(__APPLE__)
-  nfsmw::boot::SetLastPPCBreadcrumb(fn, lr, ctr);
+  nfsmw::boot::SetLastPPCBreadcrumb(fn, lr, r3);
 #else
-  (void)fn; (void)lr; (void)ctr;
+  (void)fn; (void)lr; (void)r3;
 #endif
 }
 
@@ -234,6 +234,51 @@ void NoopTrap(PPCContext& ctx, uint8_t* base) {
         }
       }
     }
+
+    // 8. MemberAdapter Variant 2 (e.g. 0x82575CF0):
+    // mr r11, r4; mr r10, r3; mr r4, r10; lwz r3, 4(r11); lwz r11, 0(r11); mtctr r11; bctr
+    if (inst0 == 0x7C8B2378u && inst1 == 0x7C6A1B78u && target + 28 <= 0x82B35C64u) {
+      const uint32_t inst2 = REX_LOAD_U32(target + 8);
+      const uint32_t inst3 = REX_LOAD_U32(target + 12);
+      const uint32_t inst4 = REX_LOAD_U32(target + 16);
+      const uint32_t inst5 = REX_LOAD_U32(target + 20);
+      const uint32_t inst6 = REX_LOAD_U32(target + 24);
+      if (inst2 == 0x7D445378u && inst3 == 0x806B0004u &&
+          inst4 == 0x816B0000u && inst5 == 0x7D6903A6u && inst6 == 0x4E800420u) {
+        ctx.r11.u64 = ctx.r4.u64;
+        ctx.r10.u64 = ctx.r3.u64;
+        ctx.r4.u64 = ctx.r10.u64;
+        ctx.r3.u64 = REX_LOAD_U32(ctx.r11.u32 + 4);
+        ctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 0);
+        ctx.ctr.u64 = ctx.r11.u64;
+        REXLOG_WARN("[dispatch] DYNAMIC MEMBER ADAPTER V2: target 0x{:08X} -> ctr 0x{:08X}, r3 0x{:08X}",
+                    target, ctx.ctr.u32, ctx.r3.u32);
+        REX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+        return;
+      }
+    }
+
+    // 9. Setter tail-call (e.g. 0x82287280):
+    // li r11, 0; stw r11, simm(r3); b target2
+    if (inst0 == 0x39600000u && (inst1 & 0xFFFF0000u) == 0x91630000u && target + 12 <= 0x82B35C64u) {
+      const uint32_t inst2 = REX_LOAD_U32(target + 8);
+      if (((inst2 >> 26) & 0x3Fu) == 18u && (inst2 & 1u) == 0) {
+        const int16_t simm = static_cast<int16_t>(inst1 & 0xFFFFu);
+        uint32_t li = inst2 & 0x03FFFFFCu;
+        if (li & 0x02000000u) {
+          li |= 0xFC000000u;
+        }
+        const bool aa = (inst2 & 2u) != 0;
+        const uint32_t branch_target = aa ? li : (target + 8u + li);
+        REXLOG_WARN("[dispatch] DYNAMIC SETTER TAILCALL: target 0x{:08X} (stw 0, {}(0x{:08X}); b 0x{:08X})",
+                    target, simm, ctx.r3.u32, branch_target);
+        if (ctx.r3.u32 != 0) {
+          REX_STORE_U32(ctx.r3.u32 + simm, 0);
+        }
+        REX_CALL_INDIRECT_FUNC(branch_target);
+        return;
+      }
+    }
   }
 
   uint32_t caller_lr = static_cast<uint32_t>(ctx.lr);
@@ -270,7 +315,7 @@ void NoopTrap(PPCContext& ctx, uint8_t* base) {
 #endif
 
   RecordUnregisteredTarget(target, caller_lr, tid, ctx.r3.u32);
-  RecordPPCBreadcrumb(target, caller_lr, ctx.ctr.u32);
+  RecordPPCBreadcrumb(target, caller_lr, ctx.r3.u32);
   // Defensive null-guard for post-race Career / Quick Race state machine (Xenon ABI struct-return)
   if (ctx.r4.u32 >= 0x70000000 && ctx.r4.u32 == ctx.r31.u32) {
     // Xenon ABI struct return: caller set r4 and r31 to the return struct buffer!
@@ -679,7 +724,6 @@ namespace rex::runtime {
   }
 
   tl_last_indirect_target = guest_address;
-  RecordPPCBreadcrumb(guest_address, 0, 0);
   if (Runtime* rt = Runtime::instance()) {
     if (FunctionDispatcher* d = rt->function_dispatcher()) {
       if (::PPCFunc* f = d->GetFunction(guest_address)) {
@@ -687,6 +731,7 @@ namespace rex::runtime {
       }
     }
   }
+  RecordPPCBreadcrumb(guest_address, 0, 0);
   return &NoopTrap;
 }
 

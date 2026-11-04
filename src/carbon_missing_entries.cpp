@@ -15,6 +15,12 @@ constexpr std::array<uint32_t, 8> kMemberAdapter = {
   0x816B0000, 0x7C6A4A14, 0x7D6903A6, 0x4E800420,
 };
 
+// Identical seven-instruction member-callback adapters (Variant 2, e.g. 0x82575CF0).
+constexpr std::array<uint32_t, 7> kMemberAdapter2 = {
+  0x7C8B2378, 0x7C6A1B78, 0x7D445378, 0x806B0004,
+  0x816B0000, 0x7D6903A6, 0x4E800420,
+};
+
 void Carbon_MemberAdapter(PPCContext& ctx, uint8_t* base) {
   ctx.r11.u64 = ctx.r4.u64;
   ctx.r4.u64 = ctx.r3.u64;
@@ -24,6 +30,33 @@ void Carbon_MemberAdapter(PPCContext& ctx, uint8_t* base) {
   ctx.r3.u64 = ctx.r10.u64 + ctx.r9.u64;
   ctx.ctr.u64 = ctx.r11.u64;
   REX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+}
+
+void Carbon_MemberAdapter2(PPCContext& ctx, uint8_t* base) {
+  ctx.r11.u64 = ctx.r4.u64;
+  ctx.r10.u64 = ctx.r3.u64;
+  ctx.r4.u64 = ctx.r10.u64;
+  ctx.r3.u64 = REX_LOAD_U32(ctx.r11.u32 + 4);
+  ctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 0);
+  ctx.ctr.u64 = ctx.r11.u64;
+  REX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+}
+
+// USA 0x82287280: setter tail-call (li r11, 0; stw r11, 52(r3); b 0x8228C818)
+// Executed every frame during racing.
+void Carbon_82287280(PPCContext& ctx, uint8_t* base) {
+  if (ctx.r3.u32 != 0) {
+    REX_STORE_U32(ctx.r3.u32 + 52, 0);
+  }
+  REX_CALL_INDIRECT_FUNC(0x8228C818);
+}
+
+inline bool IsBarrierInstruction(uint32_t inst) {
+  if ((inst & 0xFC000003) == 0x48000000) return true;  // b <target>
+  if (inst == 0x4E800020) return true;                  // blr
+  if ((inst & 0xFC0007FE) == 0x4C000420) return true;  // bctr / bctrl
+  if (inst == 0x00000000 || inst == 0x60000000 || inst == 0x4C000064 || inst == 0x4C000066) return true;
+  return false;
 }
 
 void Carbon_Blr([[maybe_unused]] PPCContext& ctx,
@@ -207,12 +240,28 @@ constexpr std::array<uint32_t, 19> kOriginal_82321FC8 = {
 
 void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
                                   uint8_t* base) {
-  // Boot reached an unregistered 0x823503D0 consisting solely of `blr`.
-  // Any indirect entry whose actual first instruction is unconditional `blr`
-  // has exactly these semantics, including entry directly at an epilogue.
+  // Step A: Ensure all compiled functions from PPCImageConfig are registered first.
+  size_t preloaded_compiled = 0;
+  if (PPCImageConfig.func_mappings) {
+    for (size_t i = 0;; ++i) {
+      const auto& [entry_addr, entry_fn] = PPCImageConfig.func_mappings[i];
+      if (entry_addr == 0) break;
+      if (entry_fn && !dispatcher->GetFunction(entry_addr)) {
+        dispatcher->SetFunction(entry_addr, entry_fn);
+        ++preloaded_compiled;
+      }
+    }
+  }
+  if (preloaded_compiled > 0) {
+    REXLOG_INFO("[carbon] Pre-populated {} compiled functions into dispatcher", preloaded_compiled);
+  }
+
+  // Step B & C: Discover and register missing leaf blr stubs and member adapters.
   // Preserve existing generated functions; never replace an existing compiled function.
   size_t return_entries = 0;
+  size_t non_barrier_blr = 0;
   size_t member_adapters = 0;
+  size_t member_adapters2 = 0;
   size_t skipped_entries = 0;
   for (uint32_t entry = PPCImageConfig.code_base;
        entry < PPCImageConfig.code_base + PPCImageConfig.code_size; entry += 4) {
@@ -220,9 +269,15 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
       if (dispatcher->GetFunction(entry)) {
         ++skipped_entries;
       } else {
-        if (!dispatcher->SetFunction(entry, &Carbon_Blr))
-          REX_FATAL("Could not register original Carbon return instruction");
-        ++return_entries;
+        // Only register if entry is a standalone stub (preceded by a barrier or padding)
+        const uint32_t prev_inst = (entry >= PPCImageConfig.code_base + 4) ? REX_LOAD_U32(entry - 4) : 0;
+        if (IsBarrierInstruction(prev_inst)) {
+          if (!dispatcher->SetFunction(entry, &Carbon_Blr))
+            REX_FATAL("Could not register original Carbon return instruction");
+          ++return_entries;
+        } else {
+          ++non_barrier_blr;
+        }
       }
     }
     if (REX_LOAD_U32(entry) == kMemberAdapter[0] &&
@@ -244,10 +299,30 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
         }
       }
     }
+    if (REX_LOAD_U32(entry) == kMemberAdapter2[0] &&
+        entry + kMemberAdapter2.size() * 4 <= PPCImageConfig.code_base + PPCImageConfig.code_size) {
+      if (dispatcher->GetFunction(entry)) {
+        ++skipped_entries;
+      } else {
+        bool matches = true;
+        for (size_t index = 1; index < kMemberAdapter2.size(); ++index) {
+          if (REX_LOAD_U32(entry + static_cast<uint32_t>(index * 4)) != kMemberAdapter2[index]) {
+            matches = false;
+            break;
+          }
+        }
+        if (matches) {
+          if (!dispatcher->SetFunction(entry, &Carbon_MemberAdapter2))
+            REX_FATAL("Could not register original Carbon member adapter 2");
+          ++member_adapters2;
+        }
+      }
+    }
   }
-  REXLOG_INFO("[carbon] Registered {} original blr entries ({} existing compiled functions skipped)",
-              return_entries, skipped_entries);
-  REXLOG_INFO("[carbon] Registered {} verified member adapters", member_adapters);
+  REXLOG_INFO("[carbon] Registered {} standalone blr stubs ({} skipped existing, {} non-barrier epilogues preserved)",
+              return_entries, skipped_entries, non_barrier_blr);
+  REXLOG_INFO("[carbon] Registered {} verified member adapters (variant 1), {} (variant 2)",
+              member_adapters, member_adapters2);
   if (auto logger = spdlog::default_logger()) {
     logger->flush();
   }
@@ -325,6 +400,12 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
 
   // USA 0x82235638: Vehicle Controller initialization target (career cutscene transition)
   dispatcher->SetFunction(0x82235638, &Carbon_82235638);
+
+  // USA 0x82287280: setter tail-call (clears *(r3+52), branches to 0x8228C818)
+  dispatcher->SetFunction(0x82287280, &Carbon_82287280);
+
+  // USA 0x82575CF0: MemberAdapter Variant 2 (delegate callback)
+  dispatcher->SetFunction(0x82575CF0, &Carbon_MemberAdapter2);
 
   // Contiguous virtual adjustor thunk table at 0x8249B688..0x8249B838
   RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x824A0168>>(dispatcher, 0x8249B688);

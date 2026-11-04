@@ -48,14 +48,15 @@ struct sigaction g_previous[32];
 
 thread_local uint32_t tl_last_ppc_fn = 0;
 thread_local uint32_t tl_last_ppc_lr = 0;
-thread_local uint32_t tl_last_ppc_ctr = 0;
+thread_local uint32_t tl_last_ppc_r3 = 0;
 
 struct PPCBreadcrumb {
   uint32_t fn;
   uint32_t lr;
-  uint32_t ctr;
+  uint32_t r3;
+  uint32_t count;
 };
-constexpr size_t kMaxBreadcrumbs = 8;
+constexpr size_t kMaxBreadcrumbs = 16;
 thread_local PPCBreadcrumb tl_breadcrumbs[kMaxBreadcrumbs] = {};
 thread_local size_t tl_breadcrumb_head = 0;
 thread_local size_t tl_breadcrumb_count = 0;
@@ -159,8 +160,8 @@ void OnSignal(int sig, siginfo_t* info, void* context) {
                   "PPC Guest Breadcrumbs:\n"
                   "  last_ppc_fn:  0x%08X\n"
                   "  last_ppc_lr:  0x%08X\n"
-                  "  last_ppc_ctr: 0x%08X\n",
-                  tl_last_ppc_fn, tl_last_ppc_lr, tl_last_ppc_ctr);
+                  "  last_ppc_r3:  0x%08X\n",
+                  tl_last_ppc_fn, tl_last_ppc_lr, tl_last_ppc_r3);
   len += FormatLastPPCBreadcrumbs(buf + len, sizeof(buf) - len);
   len += snprintf(buf + len, sizeof(buf) - len,
                   "==============================================================\n");
@@ -212,11 +213,28 @@ void SetupAltStack() {
   sigaltstack(&ss, nullptr);
 }
 
-void SetLastPPCBreadcrumb(uint32_t fn_addr, uint32_t lr, uint32_t ctr) {
+void SetLastPPCBreadcrumb(uint32_t fn_addr, uint32_t lr, uint32_t r3) {
   tl_last_ppc_fn = fn_addr;
-  tl_last_ppc_lr = lr;
-  tl_last_ppc_ctr = ctr;
-  tl_breadcrumbs[tl_breadcrumb_head] = {fn_addr, lr, ctr};
+  if (lr != 0 || tl_last_ppc_lr == 0) tl_last_ppc_lr = lr;
+  if (r3 != 0 || tl_last_ppc_r3 == 0) tl_last_ppc_r3 = r3;
+
+  if (tl_breadcrumb_count > 0) {
+    const size_t last_idx = (tl_breadcrumb_head + kMaxBreadcrumbs - 1) % kMaxBreadcrumbs;
+    if (tl_breadcrumbs[last_idx].fn == fn_addr) {
+      if (tl_breadcrumbs[last_idx].lr == 0 && lr != 0) {
+        tl_breadcrumbs[last_idx].lr = lr;
+        tl_breadcrumbs[last_idx].r3 = r3;
+        return;
+      }
+      if (tl_breadcrumbs[last_idx].lr == lr) {
+        tl_breadcrumbs[last_idx].r3 = r3;
+        tl_breadcrumbs[last_idx].count++;
+        return;
+      }
+    }
+  }
+
+  tl_breadcrumbs[tl_breadcrumb_head] = {fn_addr, lr, r3, 1};
   tl_breadcrumb_head = (tl_breadcrumb_head + 1) % kMaxBreadcrumbs;
   if (tl_breadcrumb_count < kMaxBreadcrumbs) {
     ++tl_breadcrumb_count;
@@ -226,7 +244,7 @@ void SetLastPPCBreadcrumb(uint32_t fn_addr, uint32_t lr, uint32_t ctr) {
 size_t FormatLastPPCBreadcrumbs(char* buf, size_t buf_size) {
   if (!buf || buf_size == 0) return 0;
   size_t written = 0;
-  written += snprintf(buf + written, buf_size - written, "Last 8 PPC Guest Breadcrumbs:\n");
+  written += snprintf(buf + written, buf_size - written, "Last 16 PPC Guest Breadcrumbs:\n");
   if (tl_breadcrumb_count == 0) {
     written += snprintf(buf + written, buf_size - written, "  (none)\n");
     return written;
@@ -234,9 +252,16 @@ size_t FormatLastPPCBreadcrumbs(char* buf, size_t buf_size) {
   const size_t start = (tl_breadcrumb_head + kMaxBreadcrumbs - tl_breadcrumb_count) % kMaxBreadcrumbs;
   for (size_t i = 0; i < tl_breadcrumb_count && written < buf_size; ++i) {
     const size_t idx = (start + i) % kMaxBreadcrumbs;
-    written += snprintf(buf + written, buf_size - written,
-                        "  [%zu] fn=0x%08X lr=0x%08X ctr=0x%08X\n",
-                        i, tl_breadcrumbs[idx].fn, tl_breadcrumbs[idx].lr, tl_breadcrumbs[idx].ctr);
+    const auto& b = tl_breadcrumbs[idx];
+    if (b.count > 1) {
+      written += snprintf(buf + written, buf_size - written,
+                          "  [%zu] fn=0x%08X lr=0x%08X r3=0x%08X (x%u)\n",
+                          i, b.fn, b.lr, b.r3, b.count);
+    } else {
+      written += snprintf(buf + written, buf_size - written,
+                          "  [%zu] fn=0x%08X lr=0x%08X r3=0x%08X\n",
+                          i, b.fn, b.lr, b.r3);
+    }
   }
   return written;
 }
