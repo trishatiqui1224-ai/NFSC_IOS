@@ -111,12 +111,13 @@ import pathlib
 import shutil
 import sys
 
-MARCA = "PARCHE LOCAL - diagnostico y ruido v3"
+MARCA = "PARCHE LOCAL - diagnostico y ruido v4"
 
 # Marcas de versiones anteriores. Si aparece alguna, se revierte antes de
 # aplicar la nueva: reaplicar encima no encontraria los anclajes -ya estan
 # reescritos- y el script se pararia diciendo que el SDK ha cambiado.
 MARCAS_VIEJAS = [
+    "PARCHE LOCAL - diagnostico y ruido v3",
     "PARCHE LOCAL - diagnostico del hilo que revienta v2",
     "PARCHE LOCAL - diagnostico del hilo que revienta",
 ]
@@ -130,8 +131,11 @@ MEM_ANCLA_INC = """#include <rex/system/xmemory.h>
 """
 
 MEM_NUEVO_INC = """#include <rex/system/xmemory.h>
-#include <rex/system/xthread.h>  // PARCHE LOCAL - diagnostico y ruido v3
+#include <rex/system/xthread.h>  // PARCHE LOCAL - diagnostico y ruido v4
 #include <rex/thread.h>
+#if defined(__APPLE__) || defined(__linux__)
+#include <dlfcn.h>
+#endif
 """
 
 MEM_ANCLA = """    REXSYS_ERROR(
@@ -199,6 +203,24 @@ MEM_NUEVO = """    REXSYS_ERROR(
               "r7=0x{:08X} r11=0x{:08X} r12=0x{:08X} r30=0x{:08X} r31=0x{:08X}",
               c.r3.u32, c.r4.u32, c.r5.u32, c.r6.u32, c.r7.u32, c.r11.u32, c.r12.u32, c.r30.u32,
               c.r31.u32);
+#if defined(__APPLE__) || defined(__linux__)
+          extern "C" uintptr_t g_last_host_fault_pc __attribute__((weak));
+          if (&g_last_host_fault_pc && g_last_host_fault_pc) {
+            Dl_info dlinfo{};
+            if (dladdr(reinterpret_cast<void*>(g_last_host_fault_pc), &dlinfo) && dlinfo.dli_sname) {
+              const uintptr_t off = g_last_host_fault_pc - reinterpret_cast<uintptr_t>(dlinfo.dli_saddr);
+              REXSYS_ERROR("  [host pc] 0x{:016X} ({}+0x{:X})", g_last_host_fault_pc, dlinfo.dli_sname, off);
+            } else {
+              REXSYS_ERROR("  [host pc] 0x{:016X}", g_last_host_fault_pc);
+            }
+          }
+          extern "C" size_t CarbonFormatLastPPCBreadcrumbs(char* buf, size_t buf_size) __attribute__((weak));
+          if (&CarbonFormatLastPPCBreadcrumbs && CarbonFormatLastPPCBreadcrumbs) {
+            char bbuf[1024];
+            CarbonFormatLastPPCBreadcrumbs(bbuf, sizeof(bbuf));
+            REXSYS_ERROR("{}", bbuf);
+          }
+#endif
         }
 
         // Y si el PCR SI existe, que dicen las dos palabras que el juego

@@ -35,6 +35,14 @@ void Carbon_821A3EC8(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
   REX_CALL_INDIRECT_FUNC(0x821A35E0);
 }
 
+// USA 0x82235638: tail-call thunk (lis r11, 0x82C6; lwz r11, 0x4348(r11); mtctr r11; bctr)
+void Carbon_82235638(PPCContext& ctx, uint8_t* base) {
+  uint32_t target = REX_LOAD_U32(0x82C64348);
+  if (target) {
+    REX_CALL_INDIRECT_FUNC(target);
+  }
+}
+
 // USA equivalent of PAL 0x82641480: addi r3,r3,-4; b <target>
 // PAL target was 0x8262DB10; USA target is 0x82125CD8.
 void Carbon_8216D770(PPCContext& ctx, uint8_t* base) {
@@ -292,6 +300,14 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
 
   // USA 0x82531FB8: vtable adjustor (+84 -> 0x8253BFB0) for Career / Car Select
   RegisterAdjustor<Carbon_82531FB8>(dispatcher, 0x82531FB8);
+
+  // USA 0x82235638: tail-call thunk to *(0x82C64348)
+  constexpr uint32_t thunk_82235638 = 0x82235638;
+  if (!dispatcher->GetFunction(thunk_82235638)) {
+    if (dispatcher->SetFunction(thunk_82235638, &Carbon_82235638)) {
+      REXLOG_INFO("[carbon] Registered verified tail-call thunk 0x82235638 (USA -> *(0x82C64348))");
+    }
+  }
 
   // USA 0x8249B6B0: vtable adjustor (-8 -> 0x82482B10) for Career / Quick Race
   RegisterAdjustor<Carbon_8249B6B0>(dispatcher, 0x8249B6B0);

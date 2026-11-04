@@ -13,6 +13,7 @@ includes = []
 
 [entrypoint.functions]
 0x821A3EC8 = {}  # USA flasher/callback method called from 0x82690F0C (0x821A3EC8..0x821A3ED0)
+0x82235638 = {}  # USA tail-call thunk to *(0x82C64348)
 0x823217D0 = {}  # USA direct branch entrypoint (0x823217D0..0x82321850)
 0x824DA968 = {}  # USA Frontend init callback (0x824DA968)
 0x824E98B0 = {}  # Carbon USA main() (0x824E98B0..0x824E9948)

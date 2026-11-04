@@ -26,4 +26,11 @@ void SetupAltStack();
 // Thread-local PPC execution breadcrumb for crash reporting
 void SetLastPPCBreadcrumb(uint32_t fn_addr, uint32_t lr, uint32_t ctr);
 
+// Returns formatted ring buffer of last 8 PPC breadcrumbs
+size_t FormatLastPPCBreadcrumbs(char* buf, size_t buf_size);
+
 }  // namespace nfsmw::boot
+
+extern "C" {
+size_t CarbonFormatLastPPCBreadcrumbs(char* buf, size_t buf_size);
+}

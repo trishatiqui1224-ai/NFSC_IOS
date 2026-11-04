@@ -214,6 +214,25 @@ void NoopTrap(PPCContext& ctx, uint8_t* base) {
       ctx.r3.s64 = simm;
       return;
     }
+
+    // 7. lis r11, high; lwz r11, low(r11); mtctr r11; bctr (e.g., 0x82235638)
+    if ((inst0 & 0xFFFF0000u) == 0x3D600000u && (inst1 & 0xFFFF0000u) == 0x816B0000u &&
+        target + 16 <= 0x82B35C64u) {
+      const uint32_t inst2 = REX_LOAD_U32(target + 8);
+      const uint32_t inst3 = REX_LOAD_U32(target + 12);
+      if (inst2 == 0x7D6903A6u && inst3 == 0x4E800420u) {
+        const int16_t high = static_cast<int16_t>(inst0 & 0xFFFFu);
+        const int16_t low = static_cast<int16_t>(inst1 & 0xFFFFu);
+        const uint32_t ptr = (static_cast<uint32_t>(high) << 16) + low;
+        const uint32_t indirect_target = REX_LOAD_U32(ptr);
+        REXLOG_WARN("[dispatch] DYNAMIC POINTER THUNK: target 0x{:08X} -> *(0x{:08X}) = 0x{:08X}",
+                    target, ptr, indirect_target);
+        if (indirect_target) {
+          REX_CALL_INDIRECT_FUNC(indirect_target);
+          return;
+        }
+      }
+    }
   }
 
   uint32_t caller_lr = static_cast<uint32_t>(ctx.lr);

@@ -584,6 +584,9 @@ int main(int argc, char* argv[]) {
           t = OptionName(t) + "=1560x720";
         }
       }
+      if (OptionName(t) == "--log_level" && (t == "--log_level=error" || t == "--log_level=warn" || t == "--log_level=warning")) {
+        t = "--log_level=info";
+      }
     }
     // Deduplicate arguments so boot.txt and runtime flags have zero duplicate keys
     std::vector<std::string> dedup_texts;

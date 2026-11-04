@@ -35,6 +35,16 @@ def fail(msg):
     sys.exit(f"[ERROR] {msg}")
 
 
+def apply_career_patches():
+    """Apply required runtime safeguards to generated C++ sources."""
+    try:
+        script = ROOT / "tools" / "ios" / "patch_career_null_check.py"
+        if script.is_file():
+            subprocess.run([sys.executable, str(script)], check=False)
+    except Exception as e:
+        print(f"[Codegen] Warning: Could not run career patch script: {e}")
+
+
 def build_rexglue_cli(sdk_dir):
     """Compiles the host rexglue CLI tool from the prepared ReXGlue SDK."""
     if not sdk_dir.exists():
@@ -80,6 +90,7 @@ def check_and_extract_cache():
                     tar.extractall(path=GENERATED_DIR)
             if (GENERATED_DIR / "sources.cmake").exists():
                 print(f"[Codegen] Successfully restored generated sources from {c.name}!")
+                apply_career_patches()
                 return True
     return False
 
@@ -170,6 +181,7 @@ def generate_code(xex_path, sdk_path=None, rexglue_bin=None, force_codegen=False
     if GENERATED_DIR.is_dir():
         key_files = sorted(f.name for f in GENERATED_DIR.iterdir() if f.is_file() and (f.suffix in ('.h', '.cmake') or 'register' in f.name or 'init' in f.name))
         print(f"[Codegen] Key headers and registration files: {', '.join(key_files)}")
+    apply_career_patches()
 
 
 def main():

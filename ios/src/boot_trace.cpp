@@ -50,6 +50,16 @@ thread_local uint32_t tl_last_ppc_fn = 0;
 thread_local uint32_t tl_last_ppc_lr = 0;
 thread_local uint32_t tl_last_ppc_ctr = 0;
 
+struct PPCBreadcrumb {
+  uint32_t fn;
+  uint32_t lr;
+  uint32_t ctr;
+};
+constexpr size_t kMaxBreadcrumbs = 8;
+thread_local PPCBreadcrumb tl_breadcrumbs[kMaxBreadcrumbs] = {};
+thread_local size_t tl_breadcrumb_head = 0;
+thread_local size_t tl_breadcrumb_count = 0;
+
 void WriteFdRaw(int fd, const char* text, size_t length) {
   if (fd < 0 || !text || length == 0) return;
   while (length > 0) {
@@ -149,9 +159,11 @@ void OnSignal(int sig, siginfo_t* info, void* context) {
                   "PPC Guest Breadcrumbs:\n"
                   "  last_ppc_fn:  0x%08X\n"
                   "  last_ppc_lr:  0x%08X\n"
-                  "  last_ppc_ctr: 0x%08X\n"
-                  "==============================================================\n",
+                  "  last_ppc_ctr: 0x%08X\n",
                   tl_last_ppc_fn, tl_last_ppc_lr, tl_last_ppc_ctr);
+  len += FormatLastPPCBreadcrumbs(buf + len, sizeof(buf) - len);
+  len += snprintf(buf + len, sizeof(buf) - len,
+                  "==============================================================\n");
 
   if (len > 0) {
     WriteBothRaw(buf, size_t(len));
@@ -204,6 +216,29 @@ void SetLastPPCBreadcrumb(uint32_t fn_addr, uint32_t lr, uint32_t ctr) {
   tl_last_ppc_fn = fn_addr;
   tl_last_ppc_lr = lr;
   tl_last_ppc_ctr = ctr;
+  tl_breadcrumbs[tl_breadcrumb_head] = {fn_addr, lr, ctr};
+  tl_breadcrumb_head = (tl_breadcrumb_head + 1) % kMaxBreadcrumbs;
+  if (tl_breadcrumb_count < kMaxBreadcrumbs) {
+    ++tl_breadcrumb_count;
+  }
+}
+
+size_t FormatLastPPCBreadcrumbs(char* buf, size_t buf_size) {
+  if (!buf || buf_size == 0) return 0;
+  size_t written = 0;
+  written += snprintf(buf + written, buf_size - written, "Last 8 PPC Guest Breadcrumbs:\n");
+  if (tl_breadcrumb_count == 0) {
+    written += snprintf(buf + written, buf_size - written, "  (none)\n");
+    return written;
+  }
+  const size_t start = (tl_breadcrumb_head + kMaxBreadcrumbs - tl_breadcrumb_count) % kMaxBreadcrumbs;
+  for (size_t i = 0; i < tl_breadcrumb_count && written < buf_size; ++i) {
+    const size_t idx = (start + i) % kMaxBreadcrumbs;
+    written += snprintf(buf + written, buf_size - written,
+                        "  [%zu] fn=0x%08X lr=0x%08X ctr=0x%08X\n",
+                        i, tl_breadcrumbs[idx].fn, tl_breadcrumbs[idx].lr, tl_breadcrumbs[idx].ctr);
+  }
+  return written;
 }
 
 void SetLogFilePath(const std::string& path) {
@@ -259,3 +294,9 @@ void Trace(const std::string& line) {
 }
 
 }  // namespace nfsmw::boot
+
+extern "C" {
+size_t CarbonFormatLastPPCBreadcrumbs(char* buf, size_t buf_size) {
+  return nfsmw::boot::FormatLastPPCBreadcrumbs(buf, buf_size);
+}
+}

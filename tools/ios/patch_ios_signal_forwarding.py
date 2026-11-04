@@ -7,6 +7,22 @@ FILE = "src/core/exception_handler_posix.cpp"
 ANCHOR = '''static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
                                      void* signal_context) {
 '''
+ANCHOR_NEW = '''extern "C" uintptr_t g_last_host_fault_pc;
+uintptr_t g_last_host_fault_pc = 0;
+
+static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
+                                     void* signal_context) {
+#if REX_PLATFORM_MAC && REX_ARCH_ARM64
+  if (signal_context) {
+    auto mc = reinterpret_cast<ucontext_t*>(signal_context)->uc_mcontext;
+#if __DARWIN_OPAQUE_ARM_THREAD_STATE64
+    g_last_host_fault_pc = reinterpret_cast<uintptr_t>(mc->__ss.__opaque_pc);
+#else
+    g_last_host_fault_pc = mc->__ss.__pc;
+#endif
+  }
+#endif
+'''
 FORWARD = '''#if REX_PLATFORM_MAC
 // Guest MMIO/write-watch faults are handled first. Other faults must reach
 // the handler installed before ours (for example Metal's capture layer), or
@@ -111,7 +127,7 @@ void ExceptionHandler::Install(Handler fn, void* data) {
 BLOCKS = [
     (FILE, "signal report system headers", "#include <signal.h>\n",
      "#include <signal.h>\n#include <fcntl.h>\n#include <unistd.h>\n#include <cstdlib>\n"),
-    (FILE, "Darwin unhandled signal forwarding", ANCHOR, FORWARD + ANCHOR),
+    (FILE, "Darwin unhandled signal forwarding", ANCHOR, FORWARD + ANCHOR_NEW),
     (FILE, "forward only faults unclaimed by guest handlers", TAIL, TAIL_NEW),
     (FILE, "open optional fault report outside signal context",
      "  if (!signal_handlers_installed_) {\n    struct sigaction signal_handler;",
