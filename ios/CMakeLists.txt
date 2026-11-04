@@ -219,6 +219,7 @@ set(NFSCARBON_APP_SOURCES
     src/lifecycle.mm
     src/memory_report.mm
     src/touch_controls.mm
+    src/ios_haptics.mm
     src/audio/coreaudio_driver.mm
     src/achievements_export.cpp
     src/adaptive_qos.cpp

@@ -74,6 +74,9 @@ void Carbon_82531FB8(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
 void Carbon_8249B6B0(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
   ctx.r3.s64 = ctx.r3.s64 - 8;
   REX_CALL_INDIRECT_FUNC(0x82482B10);
+  if (ctx.r3.u32 == 0 && ctx.r31.u32 != 0) {
+    ctx.r3.u64 = ctx.r31.u64;
+  }
 }
 
 // USA 0x8249B7E0: vtable adjustor thunk (addi r3, r3, -8; b 0x82482B20)
@@ -82,6 +85,11 @@ void Carbon_8249B6B0(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
 void Carbon_8249B7E0(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
   ctx.r3.s64 = ctx.r3.s64 - 8;
   REX_CALL_INDIRECT_FUNC(0x82482B20);
+  // Defensive null-guard hook for caller 0x821375BC (at return address 0x82137814):
+  // Prevents guest 0x00000000 read if the post-race career object is uninitialized
+  if (ctx.r3.u32 == 0) {
+    ctx.r3.u64 = ctx.r31.u64 ? ctx.r31.u64 : 0xBFAA5730;
+  }
 }
 
 // USA equivalent of PAL 0x82296468 -- exact byte match at 0x82296388 (-0xE0 shift).

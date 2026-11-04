@@ -208,20 +208,24 @@ std::vector<std::string> GameArguments(const fs::path& docs, const fs::path& iso
       "--ios_xma_starve_reset=false",
       "--ios_utility_qos_guest=false",
       "--ios_utility_qos=false",
-      "--anisotropic_override=16",
-      "--present_effect=cas",
+      "--anisotropic_override=4",
+      "--present_effect=none",
       "--resolution=1560x720",
       "--carbon_scene_resolution=1560x720",
-      "--ios_display_preset=1080p",
+      "--ios_display_preset=720p",
+      "--ios_retina=false",
+      "--ios_fps_cap=60",
       "--mnk_mode=false",
       "--mnk_mouse=false",
+      "--ios_haptics=true",
+      "--ios_mvk_performance=true",
       // The Xbox 360 language and country of the game's edition (USA).
       std::string("--user_language=") + NFSCARBON_GAME_LANGUAGE,
       std::string("--user_country=") + NFSCARBON_GAME_COUNTRY,
       "--user_data_root=" + (docs / "data").string(),
       "--cache_root=" + (caches / "rexglue").string(),
       "--log_file=" + (docs / "logs" / "nfscarbon.log").string(),
-      "--log_level=info",
+      "--log_level=error",
       "--log_flush_interval=1",
       "--game_data_root=" + iso.string(),
   };
@@ -501,6 +505,9 @@ int main(int argc, char* argv[]) {
 
   setenv("SDL_IOS_ORIENTATIONS", "LandscapeLeft LandscapeRight", 1);
   SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+  SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+  SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
+  IOSHaptics_Init(true);
 
   namespace boot = nfsmw::boot;
   boot::Open((docs / "logs" / "boot.txt").string());
@@ -541,6 +548,17 @@ int main(int argc, char* argv[]) {
     [defs setObject:@"false" forKey:@"ios_utility_qos"];
     [defs setObject:@"1560x720" forKey:@"carbon_scene_resolution"];
     [defs setBool:YES forKey:@"nfsc_settings_v3"];
+    [defs synchronize];
+  }
+  if (![defs boolForKey:@"nfsc_settings_v4"]) {
+    [defs setObject:@"720p" forKey:@"scene_res"];
+    [defs setObject:@"none" forKey:@"scaling"];
+    [defs setObject:@"4" forKey:@"anisotropic"];
+    [defs setObject:@"half" forKey:@"reflection_rate"];
+    [defs setObject:@"true" forKey:@"haptics"];
+    [defs setObject:@"false" forKey:@"keyboard"];
+    [defs setObject:@"false" forKey:@"mnk_mode"];
+    [defs setBool:YES forKey:@"nfsc_settings_v4"];
     [defs synchronize];
   }
   NSString* saved_cres = [defs stringForKey:@"carbon_scene_resolution"];

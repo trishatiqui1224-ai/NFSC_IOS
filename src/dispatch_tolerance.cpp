@@ -56,6 +56,7 @@ CARBON_WEAK_IMPORT void __imp__KeBugCheckEx(PPCContext& __restrict ctx, uint8_t*
 CARBON_WEAK_IMPORT void __imp__DbgPrint(PPCContext& __restrict ctx, uint8_t* base);
 CARBON_WEAK_IMPORT void __imp__NtAllocateVirtualMemory(PPCContext& __restrict ctx, uint8_t* base);
 CARBON_WEAK_IMPORT void __imp__MmAllocatePhysicalMemoryEx(PPCContext& __restrict ctx, uint8_t* base);
+CARBON_WEAK_IMPORT void __imp__XamInputSetState(PPCContext& __restrict ctx, uint8_t* base);
 }
 
 namespace {
@@ -251,7 +252,14 @@ void NoopTrap(PPCContext& ctx, uint8_t* base) {
 
   RecordUnregisteredTarget(target, caller_lr, tid, ctx.r3.u32);
   RecordPPCBreadcrumb(target, caller_lr, ctx.ctr.u32);
-  ctx.r3.u64 = 0;
+  // Defensive null-guard for post-race Career / Quick Race state machine
+  if (caller_lr == 0x82137814 || target == 0x8249B7E0) {
+    ctx.r3.u64 = ctx.r31.u64 ? ctx.r31.u64 : 0xBFAA5730;
+  } else if (target == 0x8249B6B0) {
+    ctx.r3.u64 = ctx.r31.u64 ? ctx.r31.u64 : 0xBFAA32D8;
+  } else {
+    ctx.r3.u64 = 0;
+  }
 }
 
 static ::PPCFunc* original_terminate_title = nullptr;
@@ -263,6 +271,28 @@ static ::PPCFunc* original_bug_check_ex = nullptr;
 static ::PPCFunc* original_dbg_print = nullptr;
 static ::PPCFunc* original_nt_allocate_virtual_memory = nullptr;
 static ::PPCFunc* original_mm_allocate_physical_memory_ex = nullptr;
+static ::PPCFunc* original_xam_input_set_state = nullptr;
+
+extern "C" {
+#if defined(__APPLE__)
+void IOSHaptics_OnGuestRumble(uint16_t left_motor, uint16_t right_motor);
+#else
+inline void IOSHaptics_OnGuestRumble(uint16_t, uint16_t) {}
+#endif
+}
+
+void Carbon_XamInputSetState_Hook(PPCContext& ctx, uint8_t* base) {
+  if (base && ctx.r4.u32 != 0) {
+    const uint16_t left = REX_LOAD_U16(ctx.r4.u32);
+    const uint16_t right = REX_LOAD_U16(ctx.r4.u32 + 2);
+    IOSHaptics_OnGuestRumble(left, right);
+  }
+  if (original_xam_input_set_state) {
+    original_xam_input_set_state(ctx, base);
+  } else {
+    ctx.r3.u64 = 0; // ERROR_SUCCESS
+  }
+}
 
 void Carbon_NtAllocateVirtualMemory_Hook(PPCContext& ctx, uint8_t* base) {
   if (original_nt_allocate_virtual_memory) {
@@ -575,6 +605,9 @@ void CarbonInstallDiagnosticHooks(rex::runtime::FunctionDispatcher* dispatcher, 
     { reinterpret_cast<::PPCFunc*>(&__imp__MmAllocatePhysicalMemoryEx),
       &Carbon_MmAllocatePhysicalMemoryEx_Hook, &original_mm_allocate_physical_memory_ex,
       "MmAllocatePhysicalMemoryEx" },
+    { reinterpret_cast<::PPCFunc*>(&__imp__XamInputSetState),
+      &Carbon_XamInputSetState_Hook, &original_xam_input_set_state,
+      "XamInputSetState" },
   };
   for (const auto& h : kernel_hooks) {
     if (!h.imp_ptr) continue;

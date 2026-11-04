@@ -651,6 +651,17 @@ NSMutableDictionary<NSString*, NSString*>* LoadSettings(const fs::path& docs) {
     s[@"nfsc_keyboard_migrated"] = @"true";
     SaveSettings(docs, s);
   }
+  // High-performance default migration v4
+  if (!s[@"nfsc_settings_v4"]) {
+    s[@"scene_res"] = @"720p";
+    s[@"scaling"] = @"none";
+    s[@"anisotropic"] = @"4";
+    s[@"reflection_rate"] = @"half";
+    s[@"haptics"] = @"true";
+    s[@"keyboard"] = @"false";
+    s[@"nfsc_settings_v4"] = @"true";
+    SaveSettings(docs, s);
+  }
 
   // Sanitize any previously saved high raw resolution strings into clean display presets
   NSString* saved_scene_res = s[@"scene_res"];
@@ -791,7 +802,11 @@ std::vector<std::string> Arguments(NSDictionary<NSString*, NSString*>* s) {
   NSString* scale = Value(s, @"scale");
   const double scale_value = [scale isEqualToString:@"native"] ? ScreenPixels().height / 720.0 : scale.doubleValue;
   const int whole_scale = std::clamp(int(scale_value + 0.25), 1, 2);
-  a.push_back(std::string("--ios_retina=") + (scale_value > 1.0 ? "true" : "auto"));
+  if ([scene_res isEqualToString:@"720p"]) {
+    a.push_back("--ios_retina=false");
+  } else {
+    a.push_back(std::string("--ios_retina=") + (scale_value > 1.0 ? "true" : "auto"));
+  }
   a.push_back("--resolution_scale=" + std::to_string(whole_scale));
 
   // FPS cap and display
@@ -802,6 +817,7 @@ std::vector<std::string> Arguments(NSDictionary<NSString*, NSString*>* s) {
   // Controls
   a.push_back("--ios_touch_controls=" + b(On(s, @"touch_controls")));
   a.push_back("--ios_touch_auto_layout=" + b(On(s, @"touch_auto_layout")));
+  a.push_back("--ios_haptics=" + b(On(s, @"haptics")));
   a.push_back("--mnk_mode=" + b(On(s, @"keyboard")));
   for (const KeyBind& kb : KeyBinds()) {
     a.push_back(std::string("--") + kb.setting.UTF8String + "=" + KeyBindValue(s, kb).UTF8String);
