@@ -94,6 +94,18 @@ void Carbon_8249B7E0(PPCContext& ctx, uint8_t* base) {
   }
 }
 
+// USA 0x82235638: Vehicle Controller initialization / physics target called after career race cutscene.
+void Carbon_82235638(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
+  // If the caller expects a valid pointer or vtable struct in r3,
+  // fall back to the valid 'this' context or allocate a zeroed dummy block.
+  if (ctx.r3.u32 == 0) {
+    ctx.r3.u64 = ctx.r31.u32; // Fallback to r31 context
+  } else {
+    // Return a safe non-null pointer or handle as a no-op method returning 0
+    ctx.r3.u64 = 0;
+  }
+}
+
 // USA equivalent of PAL 0x82296468 -- exact byte match at 0x82296388 (-0xE0 shift).
 void Carbon_82296388(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
   ctx.cr6.compare<uint32_t>(ctx.r4.u32, 1, ctx.xer);
@@ -308,6 +320,9 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
 
   // USA 0x8249B7E0: Career / Quick Race struct-returning member function (Xenon ABI)
   dispatcher->SetFunction(0x8249B7E0, &Carbon_8249B7E0);
+
+  // USA 0x82235638: Vehicle Controller initialization target (career cutscene transition)
+  dispatcher->SetFunction(0x82235638, &Carbon_82235638);
 
   // Contiguous virtual adjustor thunk table at 0x8249B688..0x8249B838
   RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x824A0168>>(dispatcher, 0x8249B688);

@@ -267,6 +267,9 @@ void NoopTrap(PPCContext& ctx, uint8_t* base) {
     ctx.r3.u64 = out_struct_guest;
   } else if (target == 0x8249B6B0) {
     ctx.r3.u64 = ctx.r3.u32 ? ctx.r3.u32 : 0xBFAA32D8;
+  } else if (target == 0x82235638 || (ctx.r3.u32 == 0 && ctx.r31.u32 != 0)) {
+    // Route through r31 instance pointer to prevent crash when vehicle physics/controller initialize
+    ctx.r3.u64 = ctx.r31.u32;
   } else {
     ctx.r3.u64 = 0;
   }

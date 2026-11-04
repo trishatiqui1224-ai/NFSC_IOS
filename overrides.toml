@@ -43,3 +43,6 @@ non_volatile_as_local = false
 "0x82531FB8" = { }
 "0x8249B6B0" = { }
 "0x8249B7E0" = { }
+
+# Vehicle controller initialization / physics target called after career race cutscene
+"0x82235638" = { }
