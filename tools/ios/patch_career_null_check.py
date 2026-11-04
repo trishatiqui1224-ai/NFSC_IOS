@@ -40,3 +40,4 @@ if __name__ == "__main__":
     root = pathlib.Path(__file__).resolve().parents[2]
     ok = apply_patch(root)
     sys.exit(0 if ok else 1)
+
