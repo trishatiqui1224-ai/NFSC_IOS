@@ -135,6 +135,8 @@ MEM_NUEVO_INC = """#include <rex/system/xmemory.h>
 #include <rex/thread.h>
 #if defined(__APPLE__) || defined(__linux__)
 #include <dlfcn.h>
+extern "C" uintptr_t g_last_host_fault_pc __attribute__((weak));
+extern "C" size_t CarbonFormatLastPPCBreadcrumbs(char* buf, size_t buf_size) __attribute__((weak));
 #endif
 """
 
@@ -204,7 +206,6 @@ MEM_NUEVO = """    REXSYS_ERROR(
               c.r3.u32, c.r4.u32, c.r5.u32, c.r6.u32, c.r7.u32, c.r11.u32, c.r12.u32, c.r30.u32,
               c.r31.u32);
 #if defined(__APPLE__) || defined(__linux__)
-          extern "C" uintptr_t g_last_host_fault_pc __attribute__((weak));
           if (&g_last_host_fault_pc && g_last_host_fault_pc) {
             Dl_info dlinfo{};
             if (dladdr(reinterpret_cast<void*>(g_last_host_fault_pc), &dlinfo) && dlinfo.dli_sname) {
@@ -214,7 +215,6 @@ MEM_NUEVO = """    REXSYS_ERROR(
               REXSYS_ERROR("  [host pc] 0x{:016X}", g_last_host_fault_pc);
             }
           }
-          extern "C" size_t CarbonFormatLastPPCBreadcrumbs(char* buf, size_t buf_size) __attribute__((weak));
           if (&CarbonFormatLastPPCBreadcrumbs && CarbonFormatLastPPCBreadcrumbs) {
             char bbuf[1024];
             CarbonFormatLastPPCBreadcrumbs(bbuf, sizeof(bbuf));
