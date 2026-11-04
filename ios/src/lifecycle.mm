@@ -53,7 +53,86 @@ REXCVAR_DEFINE_STRING(ios_display_preset, "1080p", "Display",
 #include <atomic>
 #include <spdlog/spdlog.h>
 
+static std::atomic<uint32_t> g_preset_drawable_w{0};
+static std::atomic<uint32_t> g_preset_drawable_h{0};
+
+extern "C" {
+typedef void (*MetalLayerPresetFn)(void* layer);
+typedef uint32_t (*MetalLayerDimFn)();
+
+extern __attribute__((weak)) MetalLayerPresetFn g_apply_metal_preset;
+extern __attribute__((weak)) MetalLayerDimFn g_get_drawable_w;
+extern __attribute__((weak)) MetalLayerDimFn g_get_drawable_h;
+
+uint32_t GetMetalLayerDrawableWidth() {
+  return g_preset_drawable_w.load(std::memory_order_relaxed);
+}
+
+uint32_t GetMetalLayerDrawableHeight() {
+  return g_preset_drawable_h.load(std::memory_order_relaxed);
+}
+
+void ApplyMetalLayerPreset(void* raw_layer) {
+  if (!raw_layer) return;
+  id obj = (__bridge id)raw_layer;
+  if (![obj isKindOfClass:[CAMetalLayer class]]) return;
+  CAMetalLayer* metalLayer = (CAMetalLayer*)obj;
+
+  UIScreen* screen = UIScreen.mainScreen;
+  const CGFloat native_scale = screen.nativeScale ?: (screen.scale ?: 2.0);
+  const CGSize screen_pixels = screen.nativeBounds.size;
+  const CGFloat max_dim = std::max(screen_pixels.width, screen_pixels.height);
+  const CGFloat min_dim = std::min(screen_pixels.width, screen_pixels.height);
+  const CGFloat aspect = (min_dim > 0) ? (max_dim / min_dim) : (16.0 / 9.0);
+
+  const std::string preset = REXCVAR_GET(ios_display_preset);
+  uint32_t target_h = 1080;
+  if (preset == "720p") target_h = 720;
+  else if (preset == "900p") target_h = 900;
+  else if (preset == "retina") target_h = uint32_t(std::lround(min_dim));
+  else target_h = 1080;
+
+  if (target_h > min_dim) target_h = uint32_t(std::lround(min_dim));
+
+  uint32_t target_w = uint32_t(std::lround(target_h * aspect));
+  target_w = (target_w + 1) & ~1u;
+
+  CGFloat scale = CGFloat(target_h) / (screen.bounds.size.height > 0 ? screen.bounds.size.height : 1.0);
+  if (preset == "retina") {
+    scale = native_scale;
+    target_w = uint32_t(std::lround(max_dim));
+    target_h = uint32_t(std::lround(min_dim));
+  }
+
+  g_preset_drawable_w.store(target_w, std::memory_order_relaxed);
+  g_preset_drawable_h.store(target_h, std::memory_order_relaxed);
+
+  if (std::abs(metalLayer.contentsScale - scale) > 0.001 ||
+      metalLayer.drawableSize.width != target_w ||
+      metalLayer.drawableSize.height != target_h) {
+    metalLayer.contentsScale = scale;
+    metalLayer.drawableSize = CGSizeMake(target_w, target_h);
+    metalLayer.contentsGravity = kCAGravityResizeAspectFill;
+    REXLOG_INFO("[ios] Display preset '{}': CAMetalLayer contentsScale={:.3f}, drawableSize={}x{}",
+                preset, scale, target_w, target_h);
+  }
+}
+}  // extern "C"
+
 namespace nfsmw::lifecycle {
+
+void RegisterMetalPresetCallbacks() {
+  if (&g_apply_metal_preset && g_apply_metal_preset != &ApplyMetalLayerPreset) {
+    g_apply_metal_preset = &ApplyMetalLayerPreset;
+  }
+  if (&g_get_drawable_w && g_get_drawable_w != &GetMetalLayerDrawableWidth) {
+    g_get_drawable_w = &GetMetalLayerDrawableWidth;
+  }
+  if (&g_get_drawable_h && g_get_drawable_h != &GetMetalLayerDrawableHeight) {
+    g_get_drawable_h = &GetMetalLayerDrawableHeight;
+  }
+}
+
 namespace {
 
 std::function<void()> g_pause, g_resume;
@@ -134,6 +213,18 @@ void Resume(const char* why) {
   g_resume();
 }
 
+UIView* FindMetalView(UIView* view, Class metal) {
+  if ([view isKindOfClass:metal]) {
+    return view;
+  }
+  for (UIView* sub in view.subviews) {
+    if (UIView* found = FindMetalView(sub, metal)) {
+      return found;
+    }
+  }
+  return nil;
+}
+
 }  // namespace
 
 void Install(std::function<void()> pause, std::function<void()> resume) {
@@ -159,20 +250,6 @@ void Install(std::function<void()> pause, std::function<void()> resume) {
   on(UIApplicationDidBecomeActiveNotification, Resume, "app active");
   on(UISceneDidActivateNotification, Resume, "scene active");
   StartStallWatchdog();
-}
-
-namespace {
-
-UIView* FindMetalView(UIView* view, Class metal) {
-  if ([view isKindOfClass:metal]) {
-    return view;
-  }
-  for (UIView* sub in view.subviews) {
-    if (UIView* found = FindMetalView(sub, metal)) {
-      return found;
-    }
-  }
-  return nil;
 }
 
 void KeepMetalViewWindowSized() {
@@ -219,92 +296,6 @@ void KeepMetalViewWindowSized() {
   if ([view.layer isKindOfClass:[CAMetalLayer class]]) {
     ApplyMetalLayerPreset((__bridge void*)view.layer);
   }
-}
-
-}  // namespace
-
-static std::atomic<uint32_t> g_preset_drawable_w{0};
-static std::atomic<uint32_t> g_preset_drawable_h{0};
-
-extern "C" {
-typedef void (*MetalLayerPresetFn)(void* layer);
-typedef uint32_t (*MetalLayerDimFn)();
-
-extern __attribute__((weak)) MetalLayerPresetFn g_apply_metal_preset;
-extern __attribute__((weak)) MetalLayerDimFn g_get_drawable_w;
-extern __attribute__((weak)) MetalLayerDimFn g_get_drawable_h;
-
-uint32_t GetMetalLayerDrawableWidth() {
-  return g_preset_drawable_w.load(std::memory_order_relaxed);
-}
-
-uint32_t GetMetalLayerDrawableHeight() {
-  return g_preset_drawable_h.load(std::memory_order_relaxed);
-}
-}
-
-extern "C" void ApplyMetalLayerPreset(void* raw_layer) {
-  if (!raw_layer) return;
-  id obj = (__bridge id)raw_layer;
-  if (![obj isKindOfClass:[CAMetalLayer class]]) return;
-  CAMetalLayer* metalLayer = (CAMetalLayer*)obj;
-
-  UIScreen* screen = UIScreen.mainScreen;
-  const CGFloat native_scale = screen.nativeScale ?: (screen.scale ?: 2.0);
-  const CGSize screen_pixels = screen.nativeBounds.size;
-  const CGFloat max_dim = std::max(screen_pixels.width, screen_pixels.height);
-  const CGFloat min_dim = std::min(screen_pixels.width, screen_pixels.height);
-  const CGFloat aspect = (min_dim > 0) ? (max_dim / min_dim) : (16.0 / 9.0);
-
-  const std::string preset = REXCVAR_GET(ios_display_preset);
-  uint32_t target_h = 1080;
-  if (preset == "720p") target_h = 720;
-  else if (preset == "900p") target_h = 900;
-  else if (preset == "retina") target_h = uint32_t(std::lround(min_dim));
-  else target_h = 1080;
-
-  if (target_h > min_dim) target_h = uint32_t(std::lround(min_dim));
-
-  uint32_t target_w = uint32_t(std::lround(target_h * aspect));
-  target_w = (target_w + 1) & ~1u;
-
-  CGFloat scale = CGFloat(target_h) / (screen.bounds.size.height > 0 ? screen.bounds.size.height : 1.0);
-  if (preset == "retina") {
-    scale = native_scale;
-    target_w = uint32_t(std::lround(max_dim));
-    target_h = uint32_t(std::lround(min_dim));
-  }
-
-  g_preset_drawable_w.store(target_w, std::memory_order_relaxed);
-  g_preset_drawable_h.store(target_h, std::memory_order_relaxed);
-
-  if (std::abs(metalLayer.contentsScale - scale) > 0.001 ||
-      metalLayer.drawableSize.width != target_w ||
-      metalLayer.drawableSize.height != target_h) {
-    metalLayer.contentsScale = scale;
-    metalLayer.drawableSize = CGSizeMake(target_w, target_h);
-    metalLayer.contentsGravity = kCAGravityResizeAspectFill;
-    REXLOG_INFO("[ios] Display preset '{}': CAMetalLayer contentsScale={:.3f}, drawableSize={}x{}",
-                preset, scale, target_w, target_h);
-  }
-}
-
-namespace nfsmw::lifecycle {
-
-void RegisterMetalPresetCallbacks() {
-  if (&g_apply_metal_preset && g_apply_metal_preset != &ApplyMetalLayerPreset) {
-    g_apply_metal_preset = &ApplyMetalLayerPreset;
-  }
-  if (&g_get_drawable_w && g_get_drawable_w != &GetMetalLayerDrawableWidth) {
-    g_get_drawable_w = &GetMetalLayerDrawableWidth;
-  }
-  if (&g_get_drawable_h && g_get_drawable_h != &GetMetalLayerDrawableHeight) {
-    g_get_drawable_h = &GetMetalLayerDrawableHeight;
-  }
-}
-
-void KeepMetalViewWindowSized() {
-  ::KeepMetalViewWindowSized();
 }
 
 void OnDisplayTick() {
