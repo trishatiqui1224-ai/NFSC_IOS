@@ -26,6 +26,19 @@
 //     option twice, and a repeated one left others unapplied on Android.
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#include "ios_haptics.h"
+
+// Forward declarations for iOS Haptic Feedback & Controller Vibration
+extern "C" {
+void IOSHaptics_Init(bool enabled);
+void IOSHaptics_SetEnabled(bool enabled);
+bool IOSHaptics_IsEnabled();
+void IOSHaptics_TriggerTouch(float intensity);
+void IOSHaptics_TriggerTap(float intensity);
+void IOSHaptics_TriggerRumble(uint16_t left_motor, uint16_t right_motor, uint64_t now_ms);
+void IOSHaptics_OnGuestRumble(uint16_t left_motor, uint16_t right_motor);
+}
 
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_main.h>
@@ -507,7 +520,12 @@ int main(int argc, char* argv[]) {
   SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
   SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
   SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
-  IOSHaptics_Init(true);
+  bool ios_haptics_enabled = true;
+  NSUserDefaults* defs_init = [NSUserDefaults standardUserDefaults];
+  if ([defs_init objectForKey:@"haptics"]) {
+    ios_haptics_enabled = [defs_init boolForKey:@"haptics"];
+  }
+  IOSHaptics_Init(ios_haptics_enabled);
 
   namespace boot = nfsmw::boot;
   boot::Open((docs / "logs" / "boot.txt").string());
