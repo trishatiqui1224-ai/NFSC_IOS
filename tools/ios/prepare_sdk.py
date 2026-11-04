@@ -244,7 +244,55 @@ def safeguard_preset_layer(sdk):
     p = sdk / "src" / "ui" / "window_sdl.cpp"
     if p.exists():
         txt = p.read_text(encoding="utf-8")
-        if "ApplyMetalLayerPreset" not in txt:
+        if "g_apply_metal_preset" not in txt:
+            # Revert any previous non-pointer version if present
+            if "extern void ApplyMetalLayerPreset" in txt:
+                txt = txt.replace(
+                    '''#if REX_PLATFORM_IOS
+        extern void ApplyMetalLayerPreset(void* layer);
+        extern uint32_t GetMetalLayerDrawableWidth();
+        extern uint32_t GetMetalLayerDrawableHeight();
+        ApplyMetalLayerPreset(layer);
+        if (uint32_t dw = GetMetalLayerDrawableWidth()) {
+          uint32_t dh = GetMetalLayerDrawableHeight();
+          WindowDestructionReceiver destruction_receiver(this);
+          OnActualSizeUpdate(dw, dh, destruction_receiver);
+        }
+#endif''',
+                    '''#if REX_PLATFORM_IOS
+        if (g_apply_metal_preset) {
+          g_apply_metal_preset(layer);
+        }
+        if (g_get_drawable_w && g_get_drawable_h) {
+          uint32_t dw = g_get_drawable_w();
+          uint32_t dh = g_get_drawable_h();
+          if (dw > 0 && dh > 0) {
+            WindowDestructionReceiver destruction_receiver(this);
+            OnActualSizeUpdate(dw, dh, destruction_receiver);
+          }
+        }
+#endif'''
+                )
+            # Add global pointer definitions
+            anchor_global = '''namespace rex::ui {
+
+namespace {'''
+            new_global = '''#if REX_PLATFORM_IOS
+extern "C" {
+typedef void (*MetalLayerPresetFn)(void* layer);
+typedef uint32_t (*MetalLayerDimFn)();
+__attribute__((visibility("default"))) MetalLayerPresetFn g_apply_metal_preset = nullptr;
+__attribute__((visibility("default"))) MetalLayerDimFn g_get_drawable_w = nullptr;
+__attribute__((visibility("default"))) MetalLayerDimFn g_get_drawable_h = nullptr;
+}
+#endif
+
+namespace rex::ui {
+
+namespace {'''
+            if anchor_global in txt and "g_apply_metal_preset" not in txt:
+                txt = txt.replace(anchor_global, new_global)
+
             old_layer = '''#elif REX_PLATFORM_MAC
   if (allowed_types & Surface::kTypeFlag_CAMetalLayer) {
     SDL_MetalView metal_view = SDL_Metal_CreateView(sdl_window_);
@@ -263,14 +311,16 @@ def safeguard_preset_layer(sdk):
       void* layer = SDL_Metal_GetLayer(metal_view);
       if (layer) {
 #if REX_PLATFORM_IOS
-        extern void ApplyMetalLayerPreset(void* layer);
-        extern uint32_t GetMetalLayerDrawableWidth();
-        extern uint32_t GetMetalLayerDrawableHeight();
-        ApplyMetalLayerPreset(layer);
-        if (uint32_t dw = GetMetalLayerDrawableWidth()) {
-          uint32_t dh = GetMetalLayerDrawableHeight();
-          WindowDestructionReceiver destruction_receiver(this);
-          OnActualSizeUpdate(dw, dh, destruction_receiver);
+        if (g_apply_metal_preset) {
+          g_apply_metal_preset(layer);
+        }
+        if (g_get_drawable_w && g_get_drawable_h) {
+          uint32_t dw = g_get_drawable_w();
+          uint32_t dh = g_get_drawable_h();
+          if (dw > 0 && dh > 0) {
+            WindowDestructionReceiver destruction_receiver(this);
+            OnActualSizeUpdate(dw, dh, destruction_receiver);
+          }
         }
 #endif
         return std::make_unique<CAMetalLayerSurface>(sdl_window_, metal_view, layer);
@@ -280,8 +330,32 @@ def safeguard_preset_layer(sdk):
   }'''
             if old_layer in txt:
                 txt = txt.replace(old_layer, new_layer)
-                p.write_text(txt, encoding="utf-8")
-                print("  [ok] Safeguarded window_sdl.cpp (CAMetalLayer preset scaling)")
+
+            old_size = '''  int pixel_width = 0;
+  int pixel_height = 0;
+  SDL_GetWindowSizeInPixels(sdl_window_, &pixel_width, &pixel_height);
+  WindowDestructionReceiver destruction_receiver(this);
+  OnActualSizeUpdate(uint32_t(pixel_width), uint32_t(pixel_height), destruction_receiver);'''
+            new_size = '''  int pixel_width = 0;
+  int pixel_height = 0;
+  SDL_GetWindowSizeInPixels(sdl_window_, &pixel_width, &pixel_height);
+#if REX_PLATFORM_IOS
+  if (g_get_drawable_w && g_get_drawable_h) {
+    uint32_t dw = g_get_drawable_w();
+    uint32_t dh = g_get_drawable_h();
+    if (dw > 0 && dh > 0) {
+      pixel_width = int(dw);
+      pixel_height = int(dh);
+    }
+  }
+#endif
+  WindowDestructionReceiver destruction_receiver(this);
+  OnActualSizeUpdate(uint32_t(pixel_width), uint32_t(pixel_height), destruction_receiver);'''
+            if old_size in txt:
+                txt = txt.replace(old_size, new_size)
+
+            p.write_text(txt, encoding="utf-8")
+            print("  [ok] Safeguarded window_sdl.cpp (CAMetalLayer preset function pointers)")
 
 
 def moltenvk(sdk):

@@ -335,6 +335,7 @@ void ApplyExtraArguments(const fs::path& file, std::vector<std::string>& args) {
 #if NFSMW_WITH_GAME
 int RunGame(int argc, char* argv[], const fs::path& docs) {
   namespace boot = nfsmw::boot;
+  nfsmw::lifecycle::RegisterMetalPresetCallbacks();
   rex::audio::ios::PrepareAudioSession();
   boot::Trace("game: parsing the arguments");
   std::vector<std::string> experiment_args;

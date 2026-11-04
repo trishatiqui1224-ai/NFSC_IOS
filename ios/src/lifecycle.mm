@@ -226,12 +226,21 @@ void KeepMetalViewWindowSized() {
 static std::atomic<uint32_t> g_preset_drawable_w{0};
 static std::atomic<uint32_t> g_preset_drawable_h{0};
 
-extern "C" uint32_t GetMetalLayerDrawableWidth() {
+extern "C" {
+typedef void (*MetalLayerPresetFn)(void* layer);
+typedef uint32_t (*MetalLayerDimFn)();
+
+extern __attribute__((weak)) MetalLayerPresetFn g_apply_metal_preset;
+extern __attribute__((weak)) MetalLayerDimFn g_get_drawable_w;
+extern __attribute__((weak)) MetalLayerDimFn g_get_drawable_h;
+
+uint32_t GetMetalLayerDrawableWidth() {
   return g_preset_drawable_w.load(std::memory_order_relaxed);
 }
 
-extern "C" uint32_t GetMetalLayerDrawableHeight() {
+uint32_t GetMetalLayerDrawableHeight() {
   return g_preset_drawable_h.load(std::memory_order_relaxed);
+}
 }
 
 extern "C" void ApplyMetalLayerPreset(void* raw_layer) {
@@ -281,6 +290,18 @@ extern "C" void ApplyMetalLayerPreset(void* raw_layer) {
 }
 
 namespace nfsmw::lifecycle {
+
+void RegisterMetalPresetCallbacks() {
+  if (&g_apply_metal_preset && g_apply_metal_preset != &ApplyMetalLayerPreset) {
+    g_apply_metal_preset = &ApplyMetalLayerPreset;
+  }
+  if (&g_get_drawable_w && g_get_drawable_w != &GetMetalLayerDrawableWidth) {
+    g_get_drawable_w = &GetMetalLayerDrawableWidth;
+  }
+  if (&g_get_drawable_h && g_get_drawable_h != &GetMetalLayerDrawableHeight) {
+    g_get_drawable_h = &GetMetalLayerDrawableHeight;
+  }
+}
 
 void KeepMetalViewWindowSized() {
   ::KeepMetalViewWindowSized();

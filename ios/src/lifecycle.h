@@ -18,6 +18,9 @@ void OnDisplayTick();
 // display preset (720p, 900p, 1080p, retina).
 void KeepMetalViewWindowSized();
 
+// Connects function pointer hooks in WindowSDL to ApplyMetalLayerPreset.
+void RegisterMetalPresetCallbacks();
+
 }  // namespace nfsmw::lifecycle
 
 extern "C" {

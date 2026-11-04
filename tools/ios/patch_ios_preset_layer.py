@@ -18,6 +18,26 @@ from patch_engine import run  # noqa: E402
 
 W = "src/ui/window_sdl.cpp"
 
+GLOBAL_ANCHOR = '''namespace rex::ui {
+
+namespace {
+'''
+
+GLOBAL_NEW = '''#if REX_PLATFORM_IOS
+extern "C" {
+typedef void (*MetalLayerPresetFn)(void* layer);
+typedef uint32_t (*MetalLayerDimFn)();
+__attribute__((visibility("default"))) MetalLayerPresetFn g_apply_metal_preset = nullptr;
+__attribute__((visibility("default"))) MetalLayerDimFn g_get_drawable_w = nullptr;
+__attribute__((visibility("default"))) MetalLayerDimFn g_get_drawable_h = nullptr;
+}
+#endif
+
+namespace rex::ui {
+
+namespace {
+'''
+
 LAYER_ANCHOR = '''#elif REX_PLATFORM_MAC
   if (allowed_types & Surface::kTypeFlag_CAMetalLayer) {
     SDL_MetalView metal_view = SDL_Metal_CreateView(sdl_window_);
@@ -40,14 +60,16 @@ LAYER_NEW = '''#elif REX_PLATFORM_MAC
 #if REX_PLATFORM_IOS
         // LOCAL PATCH - iOS: configure preset on CAMetalLayer before swapchain creation
         // and update actual window dimensions so VulkanPresenter matches drawable size.
-        extern void ApplyMetalLayerPreset(void* layer);
-        extern uint32_t GetMetalLayerDrawableWidth();
-        extern uint32_t GetMetalLayerDrawableHeight();
-        ApplyMetalLayerPreset(layer);
-        if (uint32_t dw = GetMetalLayerDrawableWidth()) {
-          uint32_t dh = GetMetalLayerDrawableHeight();
-          WindowDestructionReceiver destruction_receiver(this);
-          OnActualSizeUpdate(dw, dh, destruction_receiver);
+        if (g_apply_metal_preset) {
+          g_apply_metal_preset(layer);
+        }
+        if (g_get_drawable_w && g_get_drawable_h) {
+          uint32_t dw = g_get_drawable_w();
+          uint32_t dh = g_get_drawable_h();
+          if (dw > 0 && dh > 0) {
+            WindowDestructionReceiver destruction_receiver(this);
+            OnActualSizeUpdate(dw, dh, destruction_receiver);
+          }
         }
 #endif
         return std::make_unique<CAMetalLayerSurface>(sdl_window_, metal_view, layer);
@@ -68,16 +90,21 @@ SIZE_NEW = '''  int pixel_width = 0;
   int pixel_height = 0;
   SDL_GetWindowSizeInPixels(sdl_window_, &pixel_width, &pixel_height);
 #if REX_PLATFORM_IOS
-  extern uint32_t GetMetalLayerDrawableWidth();
-  extern uint32_t GetMetalLayerDrawableHeight();
-  if (uint32_t dw = GetMetalLayerDrawableWidth()) pixel_width = int(dw);
-  if (uint32_t dh = GetMetalLayerDrawableHeight()) pixel_height = int(dh);
+  if (g_get_drawable_w && g_get_drawable_h) {
+    uint32_t dw = g_get_drawable_w();
+    uint32_t dh = g_get_drawable_h();
+    if (dw > 0 && dh > 0) {
+      pixel_width = int(dw);
+      pixel_height = int(dh);
+    }
+  }
 #endif
   WindowDestructionReceiver destruction_receiver(this);
   OnActualSizeUpdate(uint32_t(pixel_width), uint32_t(pixel_height), destruction_receiver);
 '''
 
 BLOCKS = [
+    (W, "export metal preset function pointer hooks", GLOBAL_ANCHOR, GLOBAL_NEW),
     (W, "apply preset to CAMetalLayer on creation", LAYER_ANCHOR, LAYER_NEW),
     (W, "update initial actual size for iOS preset", SIZE_ANCHOR, SIZE_NEW),
 ]
