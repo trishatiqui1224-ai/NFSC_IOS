@@ -26,6 +26,19 @@
 //     option twice, and a repeated one left others unapplied on Android.
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#include "ios_haptics.h"
+
+// Forward declarations for iOS Haptic Feedback & Controller Vibration
+extern "C" {
+void IOSHaptics_Init(bool enabled);
+void IOSHaptics_SetEnabled(bool enabled);
+bool IOSHaptics_IsEnabled();
+void IOSHaptics_TriggerTouch(float intensity);
+void IOSHaptics_TriggerTap(float intensity);
+void IOSHaptics_TriggerRumble(uint16_t left_motor, uint16_t right_motor, uint64_t now_ms);
+void IOSHaptics_OnGuestRumble(uint16_t left_motor, uint16_t right_motor);
+}
 
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_main.h>
@@ -208,13 +221,17 @@ std::vector<std::string> GameArguments(const fs::path& docs, const fs::path& iso
       "--ios_xma_starve_reset=false",
       "--ios_utility_qos_guest=false",
       "--ios_utility_qos=false",
-      "--anisotropic_override=16",
-      "--present_effect=cas",
+      "--anisotropic_override=4",
+      "--present_effect=none",
       "--resolution=1560x720",
       "--carbon_scene_resolution=1560x720",
-      "--ios_display_preset=1080p",
+      "--ios_display_preset=retina",
+      "--ios_retina=true",
+      "--ios_fps_cap=60",
       "--mnk_mode=false",
       "--mnk_mouse=false",
+      "--ios_haptics=true",
+      "--ios_mvk_performance=true",
       // The Xbox 360 language and country of the game's edition (USA).
       std::string("--user_language=") + NFSCARBON_GAME_LANGUAGE,
       std::string("--user_country=") + NFSCARBON_GAME_COUNTRY,
@@ -501,6 +518,14 @@ int main(int argc, char* argv[]) {
 
   setenv("SDL_IOS_ORIENTATIONS", "LandscapeLeft LandscapeRight", 1);
   SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+  SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+  SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
+  bool ios_haptics_enabled = true;
+  NSUserDefaults* defs_init = [NSUserDefaults standardUserDefaults];
+  if ([defs_init objectForKey:@"haptics"]) {
+    ios_haptics_enabled = [defs_init boolForKey:@"haptics"];
+  }
+  IOSHaptics_Init(ios_haptics_enabled);
 
   namespace boot = nfsmw::boot;
   boot::Open((docs / "logs" / "boot.txt").string());
@@ -543,6 +568,17 @@ int main(int argc, char* argv[]) {
     [defs setBool:YES forKey:@"nfsc_settings_v3"];
     [defs synchronize];
   }
+  if (![defs boolForKey:@"nfsc_settings_v4"]) {
+    [defs setObject:@"720p" forKey:@"scene_res"];
+    [defs setObject:@"none" forKey:@"scaling"];
+    [defs setObject:@"4" forKey:@"anisotropic"];
+    [defs setObject:@"half" forKey:@"reflection_rate"];
+    [defs setObject:@"true" forKey:@"haptics"];
+    [defs setObject:@"false" forKey:@"keyboard"];
+    [defs setObject:@"false" forKey:@"mnk_mode"];
+    [defs setBool:YES forKey:@"nfsc_settings_v4"];
+    [defs synchronize];
+  }
   NSString* saved_cres = [defs stringForKey:@"carbon_scene_resolution"];
   if (saved_cres) {
     unsigned w = 0, h = 0;
@@ -564,6 +600,8 @@ int main(int argc, char* argv[]) {
     SetArgument(texts, "--ios_xma_starve_reset=false");
     SetArgument(texts, "--ios_utility_qos_guest=false");
     SetArgument(texts, "--ios_utility_qos=false");
+    // Hard-enforce safe Retina display mode on iOS (never allow --ios_retina=false which shrinks the viewport)
+    SetArgument(texts, "--ios_retina=true");
     // Default mnk_mode / mnk_mouse to false on iOS unless explicitly set to true in launcher settings
     bool user_enabled_keyboard = false;
     for (const auto& a : nfsmw::launcher::SettingsArguments(docs)) {

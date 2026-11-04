@@ -84,3 +84,4 @@ includes = []
 0x8249B828 = {}  # USA vtable adjustor (addi r3, r3, -20; b 0x824799F0)
 0x8249B830 = {}  # USA vtable adjustor (addi r3, r3, -12; b 0x824799D0)
 0x82531FB8 = {}  # USA Car Select / Career vtable adjustor (addi r3, r3, 84; b 0x8253BFB0)
+0x82235638 = {}  # USA Vehicle Controller initialization target (career cutscene transition)

@@ -54,6 +54,7 @@
 
 #include "battery.h"
 #include "touch_controls.h"
+#import "ios_haptics.h"
 
 REXCVAR_DEFINE_BOOL(ios_touch_auto_layout, true, "Input",
                     "Touch controls: the DRIVE layout while driving, the PAD layout in menus and pause "
@@ -622,13 +623,26 @@ static CGFloat TouchOpacity() {
     case Kind::kStick: {
       CGFloat dx = (p.x - c.center.x) / c.radius,
               dy = c.horizontal ? 0 : (p.y - c.center.y) / c.radius;
+      // Clamp anchor so thumb doesn't have to travel extra distance when reversing direction
+      if (c.horizontal) {
+        if (dx > 1.0) { c.center.x = p.x - c.radius; dx = 1.0; }
+        if (dx < -1.0) { c.center.x = p.x + c.radius; dx = -1.0; }
+      }
       const CGFloat len = std::hypot(dx, dy);
-      if (len > 1) {
+      if (len > 1.0 && !c.horizontal) {
         dx /= len;
         dy /= len;
       }
-      c.knob = CGPointMake(dx, dy);
-      _targetSteer = float(dx);
+      constexpr float kDeadzone = 0.05f;
+      float steer_val = float(dx);
+      if (std::abs(steer_val) < kDeadzone) {
+        steer_val = 0.0f;
+      } else {
+        float sign = (steer_val > 0.0f) ? 1.0f : -1.0f;
+        steer_val = sign * ((std::abs(steer_val) - kDeadzone) / (1.0f - kDeadzone));
+      }
+      c.knob = CGPointMake(steer_val, dy);
+      _targetSteer = steer_val;
       break;
     }
     case Kind::kDpad: {
@@ -657,7 +671,7 @@ static CGFloat TouchOpacity() {
     if (_selected >= 0) {
       const Control& c = _controls[size_t(_selected)];
       _grab = CGPointMake(p.x - c.center.x, p.y - c.center.y);
-      [_haptic impactOccurred];
+      IOSHaptics_TriggerTap(0.5f);
     }
     [self setNeedsDisplay];
     return;
@@ -676,13 +690,13 @@ static CGFloat TouchOpacity() {
     if (CGRectContainsPoint(_snap, p)) {
       NativeRequestDump();
       REXLOG_INFO("[touch] snapshot requested");
-      [_haptic impactOccurred];
+      IOSHaptics_TriggerTap(0.5f);
       return;
     }
     if (CGRectContainsPoint(_modeToggle, p)) {
       _driving = !_driving;
       [NSUserDefaults.standardUserDefaults setBool:_driving forKey:@"nfsmw.touch.driving"];
-      [_haptic impactOccurred];
+      IOSHaptics_TriggerTap(0.5f);
       [self setNeedsLayout];
       return;
     }
@@ -690,7 +704,7 @@ static CGFloat TouchOpacity() {
       int next = (static_cast<int>(_steeringMode) + 1) % 3;
       _steeringMode = static_cast<SteeringMode>(next);
       [NSUserDefaults.standardUserDefaults setInteger:next forKey:@"nfsc.touch.steering_mode"];
-      [_haptic impactOccurred];
+      IOSHaptics_TriggerTap(0.5f);
       [self setNeedsLayout];
       return;
     }
@@ -705,7 +719,7 @@ static CGFloat TouchOpacity() {
     haptic = haptic || c.kind == Kind::kRoundButton || c.kind == Kind::kRectButton;
   }
   if (haptic) {
-    [_haptic impactOccurred];
+    IOSHaptics_TriggerTap(0.5f);
   }
   [self sendState];
 }
@@ -749,6 +763,10 @@ static CGFloat TouchOpacity() {
       c.pressed = false;
       c.knob = CGPointZero;
       c.dpad_bits = 0;
+      if (c.kind == Kind::kStick && c.axis == 0) {
+        _targetSteer = 0.0f;
+        _currentSteer = 0.0f;
+      }
     }
   }
   [self sendState];
@@ -776,6 +794,8 @@ static CGFloat TouchOpacity() {
     c.knob = CGPointZero;
     c.dpad_bits = 0;
   }
+  _targetSteer = 0.0f;
+  _currentSteer = 0.0f;
   [self sendState];
 }
 
@@ -813,10 +833,18 @@ static CGFloat TouchOpacity() {
         break;
     }
   }
+  bool stick_active = false;
+  for (const Control& c : _controls) {
+    if (c.kind == Kind::kStick && c.axis == 0 && c.pressed) {
+      stick_active = true;
+      break;
+    }
+  }
   if (arrow_active) {
     _targetSteer = std::clamp(arrow_steer, -1.0f, 1.0f);
-  } else if (_steeringMode == SteeringMode::kArrows) {
+  } else if (!stick_active) {
     _targetSteer = 0.0f;
+    _currentSteer = 0.0f;
   }
 
   // Response tuning: Progressive Smooth (0.35) -> Digital Direct (1.0)
@@ -829,7 +857,7 @@ static CGFloat TouchOpacity() {
 
   // CoreHaptics crossover feedback when crossing deadzone
   if ((prevSteer < -0.1f && _currentSteer >= 0.0f) || (prevSteer > 0.1f && _currentSteer <= 0.0f)) {
-    [_haptic impactOccurred];
+    IOSHaptics_TriggerTap(0.5f);
   }
 
   if (_steeringMode == SteeringMode::kArrows || arrow_active) {
@@ -1499,3 +1527,12 @@ void Install() {
 }
 
 }  // namespace nfsmw::touch
+
+@implementation UIViewController (SystemGesturesDefer)
+- (UIRectEdge)preferredScreenEdgesDeferringSystemGestures {
+  return UIRectEdgeAll;
+}
+- (BOOL)prefersHomeIndicatorAutoHidden {
+  return YES;
+}
+@end

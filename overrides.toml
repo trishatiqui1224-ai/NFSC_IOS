@@ -38,3 +38,11 @@ non_volatile_as_local = false
 
 # Standalone blr stub
 "0x823503D0" = { }
+
+# Career / Car Select vtable adjustor thunks
+"0x82531FB8" = { }
+"0x8249B6B0" = { }
+"0x8249B7E0" = { }
+
+# Vehicle controller initialization / physics target called after career race cutscene
+"0x82235638" = { }

@@ -631,7 +631,7 @@ NSMutableDictionary<NSString*, NSString*>* LoadSettings(const fs::path& docs) {
     s[@"audio_starve_reset"] = @"false";
     s[@"native_renderer"] = @"false";
     s[@"nfsmw_native_cp"] = @"false";
-    s[@"scene_res"] = @"1080p";
+    s[@"scene_res"] = @"retina";
     s[@"scaling"] = @"cas";
     s[@"anisotropic"] = @"5";
     s[@"scale"] = @"1";
@@ -649,6 +649,23 @@ NSMutableDictionary<NSString*, NSString*>* LoadSettings(const fs::path& docs) {
   if (!s[@"nfsc_keyboard_migrated"]) {
     s[@"keyboard"] = @"false";
     s[@"nfsc_keyboard_migrated"] = @"true";
+    SaveSettings(docs, s);
+  }
+  // High-performance default migration v4
+  if (!s[@"nfsc_settings_v4"]) {
+    s[@"scene_res"] = @"retina";
+    s[@"scaling"] = @"none";
+    s[@"anisotropic"] = @"4";
+    s[@"reflection_rate"] = @"half";
+    s[@"haptics"] = @"true";
+    s[@"keyboard"] = @"false";
+    s[@"nfsc_settings_v4"] = @"true";
+    SaveSettings(docs, s);
+  }
+  // Enforce Retina host swapchain migration v5
+  if (!s[@"nfsc_settings_v5"]) {
+    s[@"scene_res"] = @"retina";
+    s[@"nfsc_settings_v5"] = @"true";
     SaveSettings(docs, s);
   }
 
@@ -784,14 +801,16 @@ std::vector<std::string> Arguments(NSDictionary<NSString*, NSString*>* s) {
   a.push_back("--carbon_scene_resolution=" + guest_res);
 
   // Host Display Preset (controls Metal drawable size & host GPU spatial upscaler CAS/FSR)
-  NSString* scene_res = Value(s, @"scene_res") ?: @"1080p";
+  NSString* scene_res = Value(s, @"scene_res") ?: @"retina";
   a.push_back("--ios_display_preset=" + std::string(scene_res.UTF8String));
 
   // Render scale for emulated renderer
   NSString* scale = Value(s, @"scale");
   const double scale_value = [scale isEqualToString:@"native"] ? ScreenPixels().height / 720.0 : scale.doubleValue;
   const int whole_scale = std::clamp(int(scale_value + 0.25), 1, 2);
-  a.push_back(std::string("--ios_retina=") + (scale_value > 1.0 ? "true" : "auto"));
+  // iOS host swapchain must always use Retina backing store (2622x1206 on iPhone)
+  // to prevent SDL/MoltenVK coordinate and viewport mismatches.
+  a.push_back("--ios_retina=true");
   a.push_back("--resolution_scale=" + std::to_string(whole_scale));
 
   // FPS cap and display
@@ -802,6 +821,7 @@ std::vector<std::string> Arguments(NSDictionary<NSString*, NSString*>* s) {
   // Controls
   a.push_back("--ios_touch_controls=" + b(On(s, @"touch_controls")));
   a.push_back("--ios_touch_auto_layout=" + b(On(s, @"touch_auto_layout")));
+  a.push_back("--ios_haptics=" + b(On(s, @"haptics")));
   a.push_back("--mnk_mode=" + b(On(s, @"keyboard")));
   for (const KeyBind& kb : KeyBinds()) {
     a.push_back(std::string("--") + kb.setting.UTF8String + "=" + KeyBindValue(s, kb).UTF8String);
@@ -844,7 +864,7 @@ std::vector<std::string> Arguments(NSDictionary<NSString*, NSString*>* s) {
 
   // Logging and performance
   a.push_back(std::string("--log_level=") +
-              (!On(s, @"logging") ? "off" : On(s, @"detailed_log") ? "debug" : "info"));
+              (!On(s, @"logging") ? "off" : On(s, @"detailed_log") ? "debug" : "error"));
   a.push_back("--ios_mvk_performance=" + b(On(s, @"mvk_profiling")));
   return a;
 }

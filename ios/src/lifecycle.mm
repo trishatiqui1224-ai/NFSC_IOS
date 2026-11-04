@@ -37,7 +37,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #include <rex/cvar.h>
 
-REXCVAR_DEFINE_STRING(ios_display_preset, "1080p", "Display",
+REXCVAR_DEFINE_STRING(ios_display_preset, "retina", "Display",
                       "Host display quality preset: 720p, 900p, 1080p, retina");
 
 #include <rex/logging.h>
@@ -107,12 +107,16 @@ void ApplyMetalLayerPreset(void* raw_layer) {
   g_preset_drawable_w.store(target_w, std::memory_order_relaxed);
   g_preset_drawable_h.store(target_h, std::memory_order_relaxed);
 
+  metalLayer.contentsGravity = kCAGravityResize;
+  if (UIView* v = [metalLayer.delegate isKindOfClass:[UIView class]] ? (UIView*)metalLayer.delegate : nil) {
+    v.contentScaleFactor = scale;
+  }
+
   if (std::abs(metalLayer.contentsScale - scale) > 0.001 ||
       metalLayer.drawableSize.width != target_w ||
       metalLayer.drawableSize.height != target_h) {
     metalLayer.contentsScale = scale;
     metalLayer.drawableSize = CGSizeMake(target_w, target_h);
-    metalLayer.contentsGravity = kCAGravityResizeAspectFill;
     REXLOG_INFO("[ios] Display preset '{}': CAMetalLayer contentsScale={:.3f}, drawableSize={}x{}",
                 preset, scale, target_w, target_h);
   }

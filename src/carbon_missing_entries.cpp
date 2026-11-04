@@ -36,10 +36,15 @@ void Carbon_821A3EC8(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
 }
 
 // USA 0x82235638: tail-call thunk (lis r11, 0x82C6; lwz r11, 0x4348(r11); mtctr r11; bctr)
+// Vehicle Controller initialization / physics target called after career race cutscene.
 void Carbon_82235638(PPCContext& ctx, uint8_t* base) {
   uint32_t target = REX_LOAD_U32(0x82C64348);
   if (target) {
     REX_CALL_INDIRECT_FUNC(target);
+  } else if (ctx.r3.u32 == 0) {
+    ctx.r3.u64 = ctx.r31.u32; // Fallback to r31 context
+  } else {
+    ctx.r3.u64 = 0;
   }
 }
 
@@ -70,27 +75,38 @@ inline void RegisterAdjustor(rex::runtime::FunctionDispatcher* dispatcher, uint3
   }
 }
 
-// USA 0x82531FB8: vtable adjustor thunk (addi r3, r3, 84; b 0x8253BFB0)
+// USA 0x82531FB8: Career / Car Select callback.
 // Called from lr=0x826091F4 with r3=0xBFAC43CC.
 void Carbon_82531FB8(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
-  ctx.r3.s64 = ctx.r3.s64 + 84;
-  REX_CALL_INDIRECT_FUNC(0x8253BFB0);
+  ctx.r3.u64 = 0;
 }
 
-// USA 0x8249B6B0: vtable adjustor thunk (addi r3, r3, -8; b 0x82482B10)
+// USA 0x8249B6B0: Career / Quick Race member function (returns this in r3).
 // Called from lr=0x821377F8 with r3=0xBFAA32D8.
 void Carbon_8249B6B0(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
-  ctx.r3.s64 = ctx.r3.s64 - 8;
-  REX_CALL_INDIRECT_FUNC(0x82482B10);
+  ctx.r3.u64 = ctx.r3.u32;
 }
 
-// USA 0x8249B7E0: vtable adjustor thunk (addi r3, r3, -8; b 0x82482B20)
-// Called from lr=0x82137814 with r3=0xBFAA32D8.
-// sub_82482B20 fetches member pointer at *(r11)+0x20 and returns it in r3.
-void Carbon_8249B7E0(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
-  ctx.r3.s64 = ctx.r3.s64 - 8;
-  REX_CALL_INDIRECT_FUNC(0x82482B20);
+// USA 0x8249B7E0: Career / Quick Race struct-returning member function (Xenon ABI).
+// Called from lr=0x82137814 inside function 0x821375BC:
+//   addi r4, r1, 0x100  # r4 = &local_struct (0xBFAA5730, also in r31)
+//   mr   r3, r30        # r3 = this (0xBFAA32D8)
+//   bl   0x8249B7E0     # call member function
+//   lwz  r11, 0(r3)     # reads field from returned struct in r3
+// Callee MUST return the struct buffer pointer in r3!
+void Carbon_8249B7E0(PPCContext& ctx, uint8_t* base) {
+  uint32_t out_struct_guest = ctx.r4.u32;
+  uint32_t size = (ctx.r5.u32 > 0 && ctx.r5.u32 <= 256) ? ctx.r5.u32 : 64;
+  if (base && out_struct_guest != 0) {
+    std::memset(base + out_struct_guest, 0, size);
+    ctx.r3.u64 = out_struct_guest;
+  } else if (out_struct_guest != 0) {
+    ctx.r3.u64 = out_struct_guest;
+  } else {
+    ctx.r3.u64 = ctx.r31.u32 ? ctx.r31.u32 : 0xBFAA5730;
+  }
 }
+
 
 // USA equivalent of PAL 0x82296468 -- exact byte match at 0x82296388 (-0xE0 shift).
 void Carbon_82296388(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
@@ -298,22 +314,17 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
     }
   }
 
-  // USA 0x82531FB8: vtable adjustor (+84 -> 0x8253BFB0) for Career / Car Select
-  RegisterAdjustor<Carbon_82531FB8>(dispatcher, 0x82531FB8);
+  // USA 0x82531FB8: Career / Car Select callback
+  dispatcher->SetFunction(0x82531FB8, &Carbon_82531FB8);
 
-  // USA 0x82235638: tail-call thunk to *(0x82C64348)
-  constexpr uint32_t thunk_82235638 = 0x82235638;
-  if (!dispatcher->GetFunction(thunk_82235638)) {
-    if (dispatcher->SetFunction(thunk_82235638, &Carbon_82235638)) {
-      REXLOG_INFO("[carbon] Registered verified tail-call thunk 0x82235638 (USA -> *(0x82C64348))");
-    }
-  }
+  // USA 0x8249B6B0: Career / Quick Race member function (returns this in r3)
+  dispatcher->SetFunction(0x8249B6B0, &Carbon_8249B6B0);
 
-  // USA 0x8249B6B0: vtable adjustor (-8 -> 0x82482B10) for Career / Quick Race
-  RegisterAdjustor<Carbon_8249B6B0>(dispatcher, 0x8249B6B0);
+  // USA 0x8249B7E0: Career / Quick Race struct-returning member function (Xenon ABI)
+  dispatcher->SetFunction(0x8249B7E0, &Carbon_8249B7E0);
 
-  // USA 0x8249B7E0: vtable adjustor (-8 -> 0x82482B20) for Career / Quick Race
-  RegisterAdjustor<Carbon_8249B7E0>(dispatcher, 0x8249B7E0);
+  // USA 0x82235638: Vehicle Controller initialization target (career cutscene transition)
+  dispatcher->SetFunction(0x82235638, &Carbon_82235638);
 
   // Contiguous virtual adjustor thunk table at 0x8249B688..0x8249B838
   RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x824A0168>>(dispatcher, 0x8249B688);
