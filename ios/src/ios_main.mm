@@ -225,8 +225,8 @@ std::vector<std::string> GameArguments(const fs::path& docs, const fs::path& iso
       "--present_effect=none",
       "--resolution=1560x720",
       "--carbon_scene_resolution=1560x720",
-      "--ios_display_preset=720p",
-      "--ios_retina=false",
+      "--ios_display_preset=retina",
+      "--ios_retina=true",
       "--ios_fps_cap=60",
       "--mnk_mode=false",
       "--mnk_mouse=false",
@@ -600,6 +600,8 @@ int main(int argc, char* argv[]) {
     SetArgument(texts, "--ios_xma_starve_reset=false");
     SetArgument(texts, "--ios_utility_qos_guest=false");
     SetArgument(texts, "--ios_utility_qos=false");
+    // Hard-enforce safe Retina display mode on iOS (never allow --ios_retina=false which shrinks the viewport)
+    SetArgument(texts, "--ios_retina=true");
     // Default mnk_mode / mnk_mouse to false on iOS unless explicitly set to true in launcher settings
     bool user_enabled_keyboard = false;
     for (const auto& a : nfsmw::launcher::SettingsArguments(docs)) {

@@ -252,11 +252,21 @@ void NoopTrap(PPCContext& ctx, uint8_t* base) {
 
   RecordUnregisteredTarget(target, caller_lr, tid, ctx.r3.u32);
   RecordPPCBreadcrumb(target, caller_lr, ctx.ctr.u32);
-  // Defensive null-guard for post-race Career / Quick Race state machine
-  if (caller_lr == 0x82137814 || target == 0x8249B7E0) {
-    ctx.r3.u64 = ctx.r31.u64 ? ctx.r31.u64 : 0xBFAA5730;
+  // Defensive null-guard for post-race Career / Quick Race state machine (Xenon ABI struct-return)
+  if (ctx.r4.u32 >= 0x70000000 && ctx.r4.u32 == ctx.r31.u32) {
+    // Xenon ABI struct return: caller set r4 and r31 to the return struct buffer!
+    if (base && (ctx.r4.u32 & 3) == 0) {
+      std::memset(base + ctx.r4.u32, 0, 64);
+    }
+    ctx.r3.u64 = ctx.r4.u32;
+  } else if (caller_lr == 0x82137814 || target == 0x8249B7E0) {
+    uint32_t out_struct_guest = ctx.r4.u32 ? ctx.r4.u32 : (ctx.r31.u32 ? ctx.r31.u32 : 0xBFAA5730);
+    if (base && out_struct_guest != 0) {
+      std::memset(base + out_struct_guest, 0, 64);
+    }
+    ctx.r3.u64 = out_struct_guest;
   } else if (target == 0x8249B6B0) {
-    ctx.r3.u64 = ctx.r31.u64 ? ctx.r31.u64 : 0xBFAA32D8;
+    ctx.r3.u64 = ctx.r3.u32 ? ctx.r3.u32 : 0xBFAA32D8;
   } else {
     ctx.r3.u64 = 0;
   }
