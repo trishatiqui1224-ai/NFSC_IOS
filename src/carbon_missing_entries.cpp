@@ -122,37 +122,7 @@ inline void RegisterAdjustor(rex::runtime::FunctionDispatcher* dispatcher, uint3
   }
 }
 
-// USA 0x82531FB8: Career / Car Select callback.
-// Called from lr=0x826091F4 with r3=0xBFAC43CC.
-void Carbon_82531FB8(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
-  ctx.r3.u64 = 0;
-}
 
-// USA 0x8249B6B0: Career / Quick Race member function (returns this in r3).
-// Called from lr=0x821377F8 with r3=0xBFAA32D8.
-void Carbon_8249B6B0(PPCContext& ctx, [[maybe_unused]] uint8_t* base) {
-  ctx.r3.u64 = ctx.r3.u32;
-}
-
-// USA 0x8249B7E0: Career / Quick Race struct-returning member function (Xenon ABI).
-// Called from lr=0x82137814 inside function 0x821375BC:
-//   addi r4, r1, 0x100  # r4 = &local_struct (0xBFAA5730, also in r31)
-//   mr   r3, r30        # r3 = this (0xBFAA32D8)
-//   bl   0x8249B7E0     # call member function
-//   lwz  r11, 0(r3)     # reads field from returned struct in r3
-// Callee MUST return the struct buffer pointer in r3!
-void Carbon_8249B7E0(PPCContext& ctx, uint8_t* base) {
-  uint32_t out_struct_guest = ctx.r4.u32;
-  uint32_t size = (ctx.r5.u32 > 0 && ctx.r5.u32 <= 256) ? ctx.r5.u32 : 64;
-  if (base && out_struct_guest != 0) {
-    std::memset(base + out_struct_guest, 0, size);
-    ctx.r3.u64 = out_struct_guest;
-  } else if (out_struct_guest != 0) {
-    ctx.r3.u64 = out_struct_guest;
-  } else {
-    ctx.r3.u64 = ctx.r31.u32 ? ctx.r31.u32 : 0xBFAA5730;
-  }
-}
 
 
 // USA equivalent of PAL 0x82296468 -- exact byte match at 0x82296388 (-0xE0 shift).
@@ -392,14 +362,7 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
     }
   }
 
-  // USA 0x82531FB8: Career / Car Select callback
-  dispatcher->SetFunction(0x82531FB8, &Carbon_82531FB8);
 
-  // USA 0x8249B6B0: Career / Quick Race member function (returns this in r3)
-  dispatcher->SetFunction(0x8249B6B0, &Carbon_8249B6B0);
-
-  // USA 0x8249B7E0: Career / Quick Race struct-returning member function (Xenon ABI)
-  dispatcher->SetFunction(0x8249B7E0, &Carbon_8249B7E0);
 
   // USA 0x82235638: Vehicle Controller initialization target (career cutscene transition)
   dispatcher->SetFunction(0x82235638, &Carbon_82235638);
@@ -416,6 +379,7 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
   RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x8247D628>>(dispatcher, 0x8249B698);
   RegisterAdjustor<Carbon_Adjustor_R3<-16, 0x82482850>>(dispatcher, 0x8249B6A0);
   RegisterAdjustor<Carbon_Adjustor_R3<-24, 0x82482B30>>(dispatcher, 0x8249B6A8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-8, 0x82482B10>>(dispatcher, 0x8249B6B0);
   RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x824853F0>>(dispatcher, 0x8249B6B8);
   RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x82483CE8>>(dispatcher, 0x8249B6C0);
   RegisterAdjustor<Carbon_Adjustor_R3<-12, 0x82481410>>(dispatcher, 0x8249B6C8);
@@ -453,6 +417,7 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
   RegisterAdjustor<Carbon_Adjustor_R3<-172, 0x8247A598>>(dispatcher, 0x8249B7C8);
   RegisterAdjustor<Carbon_Adjustor_R3<-216, 0x8247D628>>(dispatcher, 0x8249B7D0);
   RegisterAdjustor<Carbon_Adjustor_R3<-172, 0x8247B3A8>>(dispatcher, 0x8249B7D8);
+  RegisterAdjustor<Carbon_Adjustor_R3<-8, 0x82482B20>>(dispatcher, 0x8249B7E0);
   RegisterAdjustor<Carbon_Adjustor_R3<-180, 0x82482EC0>>(dispatcher, 0x8249B7E8);
   RegisterAdjustor<Carbon_Adjustor_R3<-12, 0x82479900>>(dispatcher, 0x8249B7F0);
   RegisterAdjustor<Carbon_Adjustor_R3<-56, 0x82480C08>>(dispatcher, 0x8249B7F8);
@@ -476,6 +441,7 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
   RegisterAdjustor<Carbon_Adjustor_R3<-304, 0x824A8FE8>>(dispatcher, 0x824D50F8);
   RegisterAdjustor<Carbon_Adjustor_R3<-88, 0x824C7D30>>(dispatcher, 0x824D5148);
   RegisterAdjustor<Carbon_Adjustor_R3<-88, 0x824C84C8>>(dispatcher, 0x824D5198);
+  RegisterAdjustor<Carbon_Adjustor_R3<84, 0x8253BFB0>>(dispatcher, 0x82531FB8);
   RegisterAdjustor<Carbon_Adjustor_R3<-28, 0x8253A388>>(dispatcher, 0x82541688);
   RegisterAdjustor<Carbon_Adjustor_R3<-36, 0x825310C0>>(dispatcher, 0x825416B0);
   RegisterAdjustor<Carbon_Adjustor_R3<-48, 0x8252E4F8>>(dispatcher, 0x82541708);

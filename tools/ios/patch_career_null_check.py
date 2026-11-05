@@ -12,6 +12,10 @@ import sys
 TARGET_20 = "generated/default/nfscarbon_recomp.20.cpp"
 TARGET_103 = "generated/default/nfscarbon_recomp.103.cpp"
 TARGET_94 = "generated/default/nfscarbon_recomp.94.cpp"
+TARGET_136 = "generated/default/nfscarbon_recomp.136.cpp"
+TARGET_140 = "generated/default/nfscarbon_recomp.140.cpp"
+TARGET_19 = "generated/default/nfscarbon_recomp.19.cpp"
+TARGET_PCH = "generated/default/nfscarbon_pch.h"
 
 # Raw unpatched block in sub_825F6A78 (between 0x825F6B00 and 0x825F6B74)
 OLD_CODE_20_RAW = """\t// lwz r11,24(r31)
@@ -232,6 +236,113 @@ loc_82131F78:
 \tctx.r11.u64 = ctx.r11.u32 ? REX_LOAD_U32(ctx.r11.u32 + 0) : 0;"""
 
 
+
+OLD_CODE_136 = """DEFINE_REX_FUNC(sub_82482B10) {
+\tREX_FUNC_PROLOGUE();
+\t// lwz r11,48(r3)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r3.u32 + 48);
+\t// lwz r11,0(r11)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 0);
+\t// addi r3,r11,16
+\tctx.r3.s64 = ctx.r11.s64 + 16;
+\t// blr 
+\treturn;
+}"""
+
+PATCHED_CODE_136 = """DEFINE_REX_FUNC(sub_82482B10) {
+\tREX_FUNC_PROLOGUE();
+\tif (ctx.r3.u32 < 0x1000) { ctx.r3.u64 = 0; return; }
+\t// lwz r11,48(r3)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r3.u32 + 48);
+\tif (!ctx.r11.u32) { ctx.r3.u64 = 0; return; }
+\t// lwz r11,0(r11)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 0);
+\tif (!ctx.r11.u32) { ctx.r3.u64 = 0; return; }
+\t// addi r3,r11,16
+\tctx.r3.s64 = ctx.r11.s64 + 16;
+\t// blr 
+\treturn;
+}"""
+
+OLD_CODE_140 = """DEFINE_REX_FUNC(sub_82482B20) {
+\tREX_FUNC_PROLOGUE();
+\t// lwz r11,48(r3)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r3.u32 + 48);
+\t// lwz r11,0(r11)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 0);
+\t// addi r3,r11,32
+\tctx.r3.s64 = ctx.r11.s64 + 32;
+\t// blr 
+\treturn;
+}"""
+
+PATCHED_CODE_140 = """DEFINE_REX_FUNC(sub_82482B20) {
+\tREX_FUNC_PROLOGUE();
+\tif (ctx.r3.u32 < 0x1000) { ctx.r3.u64 = 0; return; }
+\t// lwz r11,48(r3)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r3.u32 + 48);
+\tif (!ctx.r11.u32) { ctx.r3.u64 = 0; return; }
+\t// lwz r11,0(r11)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 0);
+\tif (!ctx.r11.u32) { ctx.r3.u64 = 0; return; }
+\t// addi r3,r11,32
+\tctx.r3.s64 = ctx.r11.s64 + 32;
+\t// blr 
+\treturn;
+}"""
+
+OLD_CODE_19_A = """\t// bctrl 
+\tctx.lr = 0x82137814;
+\tREX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+\t// lis r11,-32250"""
+
+PATCHED_CODE_19_A = """\t// bctrl 
+\tctx.lr = 0x82137814;
+\tREX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+\tif (!ctx.r3.u32 || !ctx.r29.u32) goto loc_82137914;
+\t// lis r11,-32250"""
+
+OLD_CODE_19_B = """\t// bctrl 
+\tctx.lr = 0x821378D4;
+\tREX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+\t// mr r11,r3
+\tctx.r11.u64 = ctx.r3.u64;
+\t// addi r4,r30,160"""
+
+PATCHED_CODE_19_B = """\t// bctrl 
+\tctx.lr = 0x821378D4;
+\tREX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+\t// mr r11,r3
+\tctx.r11.u64 = ctx.r3.u64;
+\tif (!ctx.r11.u32) goto loc_82137914;
+\t// addi r4,r30,160"""
+
+OLD_CODE_PCH_DECL = """#define REX_LOOKUP_FUNC(x, y) \\"""
+
+PATCHED_CODE_PCH_DECL = """#if defined(__APPLE__)
+namespace nfsmw::boot { void SetLastPPCBreadcrumb(uint32_t fn_addr, uint32_t lr, uint32_t r3); }
+#define REX_RECORD_PPC_BREADCRUMB(tgt, lr, r3) nfsmw::boot::SetLastPPCBreadcrumb(tgt, lr, r3)
+#else
+#define REX_RECORD_PPC_BREADCRUMB(tgt, lr, r3) do {} while(0)
+#endif
+
+#define REX_LOOKUP_FUNC(x, y) \\"""
+
+OLD_CODE_PCH = """    if (!rex_indirect_func_) [[unlikely]] {                                                \\
+      ctx.last_indirect_target = rex_indirect_target_;                                     \\
+      rex_indirect_func_ = rex::runtime::ResolveIndirectFunction(rex_indirect_target_);    \\
+    }                                                                                      \\
+    rex_indirect_func_(ctx, base);                                                         \\
+  } while (0)"""
+
+PATCHED_CODE_PCH = """    if (!rex_indirect_func_) [[unlikely]] {                                                \\
+      ctx.last_indirect_target = rex_indirect_target_;                                     \\
+      rex_indirect_func_ = rex::runtime::ResolveIndirectFunction(rex_indirect_target_);    \\
+    }                                                                                      \\
+    REX_RECORD_PPC_BREADCRUMB(rex_indirect_target_, ctx.lr, ctx.r3.u32);                   \\
+    rex_indirect_func_(ctx, base);                                                         \\
+  } while (0)"""
+
 def apply_patch(root_dir: pathlib.Path) -> bool:
     success = True
     # 1. Patch recomp.20 (Career cutscene)
@@ -297,6 +408,84 @@ def apply_patch(root_dir: pathlib.Path) -> bool:
 
         if patched_any:
             target_94.write_text(text_94, encoding="utf-8")
+
+    
+    # 4. Patch recomp.136 (sub_82482B10 Position getter)
+    target_136 = root_dir / TARGET_136
+    if target_136.is_file():
+        text_136 = target_136.read_text(encoding="utf-8")
+        if "if (ctx.r3.u32 < 0x1000)" in text_136 and "sub_82482B10" in text_136:
+            print("[patch_career_null_check] Already applied in nfscarbon_recomp.136.cpp")
+        elif OLD_CODE_136 in text_136:
+            text_136 = text_136.replace(OLD_CODE_136, PATCHED_CODE_136, 1)
+            target_136.write_text(text_136, encoding="utf-8")
+            print("[patch_career_null_check] Successfully applied null-check in sub_82482B10")
+        else:
+            print("[patch_career_null_check] WARNING: Anchor not found in nfscarbon_recomp.136.cpp")
+            success = False
+
+    # 5. Patch recomp.140 (sub_82482B20 Velocity getter)
+    target_140 = root_dir / TARGET_140
+    if target_140.is_file():
+        text_140 = target_140.read_text(encoding="utf-8")
+        if "if (ctx.r3.u32 < 0x1000)" in text_140 and "sub_82482B20" in text_140:
+            print("[patch_career_null_check] Already applied in nfscarbon_recomp.140.cpp")
+        elif OLD_CODE_140 in text_140:
+            text_140 = text_140.replace(OLD_CODE_140, PATCHED_CODE_140, 1)
+            target_140.write_text(text_140, encoding="utf-8")
+            print("[patch_career_null_check] Successfully applied null-check in sub_82482B20")
+        else:
+            print("[patch_career_null_check] WARNING: Anchor not found in nfscarbon_recomp.140.cpp")
+            success = False
+
+    # 6. Patch recomp.19 (sub_821377B0 AI Navigation/Steering calculation)
+    target_19 = root_dir / TARGET_19
+    if target_19.is_file():
+        text_19 = target_19.read_text(encoding="utf-8")
+        patched_19 = False
+        if "if (!ctx.r3.u32 || !ctx.r29.u32) goto loc_82137914;" in text_19:
+            print("[patch_career_null_check] Already applied (part A) in nfscarbon_recomp.19.cpp")
+        elif OLD_CODE_19_A in text_19:
+            text_19 = text_19.replace(OLD_CODE_19_A, PATCHED_CODE_19_A, 1)
+            patched_19 = True
+            print("[patch_career_null_check] Successfully applied null-check (part A) in sub_821377B0")
+        else:
+            print("[patch_career_null_check] WARNING: Anchor A not found in nfscarbon_recomp.19.cpp")
+            success = False
+
+        if "if (!ctx.r11.u32) goto loc_82137914;" in text_19:
+            print("[patch_career_null_check] Already applied (part B) in nfscarbon_recomp.19.cpp")
+        elif OLD_CODE_19_B in text_19:
+            text_19 = text_19.replace(OLD_CODE_19_B, PATCHED_CODE_19_B, 1)
+            patched_19 = True
+            print("[patch_career_null_check] Successfully applied null-check (part B) in sub_821377B0")
+        else:
+            print("[patch_career_null_check] WARNING: Anchor B not found in nfscarbon_recomp.19.cpp")
+            success = False
+
+        if patched_19:
+            target_19.write_text(text_19, encoding="utf-8")
+
+    # 7. Patch nfscarbon_pch.h (REX_CALL_INDIRECT_FUNC Breadcrumb hook)
+    target_pch = root_dir / TARGET_PCH
+    if target_pch.is_file():
+        text_pch = target_pch.read_text(encoding="utf-8")
+        patched_pch = False
+        if "REX_RECORD_PPC_BREADCRUMB" in text_pch:
+            print("[patch_career_null_check] Already applied in nfscarbon_pch.h")
+        else:
+            if OLD_CODE_PCH_DECL in text_pch:
+                text_pch = text_pch.replace(OLD_CODE_PCH_DECL, PATCHED_CODE_PCH_DECL, 1)
+                patched_pch = True
+            if OLD_CODE_PCH in text_pch:
+                text_pch = text_pch.replace(OLD_CODE_PCH, PATCHED_CODE_PCH, 1)
+                patched_pch = True
+            if patched_pch:
+                target_pch.write_text(text_pch, encoding="utf-8")
+                print("[patch_career_null_check] Successfully applied breadcrumb hook in nfscarbon_pch.h")
+            else:
+                print("[patch_career_null_check] WARNING: Anchor not found in nfscarbon_pch.h")
+                success = False
 
     return success
 
