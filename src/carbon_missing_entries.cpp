@@ -24,10 +24,17 @@ constexpr std::array<uint32_t, 7> kMemberAdapter2 = {
 void Carbon_MemberAdapter(PPCContext& ctx, uint8_t* base) {
   ctx.r11.u64 = ctx.r4.u64;
   ctx.r4.u64 = ctx.r3.u64;
+  if (!ctx.r11.u32) {
+    ctx.r3.u64 = 0;
+    return;
+  }
   ctx.r10.u64 = REX_LOAD_U32(ctx.r11.u32 + 8);
   ctx.r9.u64 = REX_LOAD_U32(ctx.r11.u32 + 4);
   ctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32);
   ctx.r3.u64 = ctx.r10.u64 + ctx.r9.u64;
+  if (!ctx.r11.u32) {
+    return;
+  }
   ctx.ctr.u64 = ctx.r11.u64;
   REX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
 }
@@ -36,8 +43,15 @@ void Carbon_MemberAdapter2(PPCContext& ctx, uint8_t* base) {
   ctx.r11.u64 = ctx.r4.u64;
   ctx.r10.u64 = ctx.r3.u64;
   ctx.r4.u64 = ctx.r10.u64;
+  if (!ctx.r11.u32) {
+    ctx.r3.u64 = 0;
+    return;
+  }
   ctx.r3.u64 = REX_LOAD_U32(ctx.r11.u32 + 4);
   ctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 0);
+  if (!ctx.r11.u32) {
+    return;
+  }
   ctx.ctr.u64 = ctx.r11.u64;
   REX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
 }
@@ -258,8 +272,9 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
 
   // Step B & C: Discover and register missing leaf blr stubs and member adapters.
   // Preserve existing generated functions; never replace an existing compiled function.
+  // Unconditionally register all 56,548 0x4E800020 blr entries so virtual no-op methods
+  // targeted by vtables throughout the engine resolve properly without hitting NoopTrap.
   size_t return_entries = 0;
-  size_t non_barrier_blr = 0;
   size_t member_adapters = 0;
   size_t member_adapters2 = 0;
   size_t skipped_entries = 0;
@@ -269,15 +284,9 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
       if (dispatcher->GetFunction(entry)) {
         ++skipped_entries;
       } else {
-        // Only register if entry is a standalone stub (preceded by a barrier or padding)
-        const uint32_t prev_inst = (entry >= PPCImageConfig.code_base + 4) ? REX_LOAD_U32(entry - 4) : 0;
-        if (IsBarrierInstruction(prev_inst)) {
-          if (!dispatcher->SetFunction(entry, &Carbon_Blr))
-            REX_FATAL("Could not register original Carbon return instruction");
-          ++return_entries;
-        } else {
-          ++non_barrier_blr;
-        }
+        if (!dispatcher->SetFunction(entry, &Carbon_Blr))
+          REX_FATAL("Could not register original Carbon return instruction");
+        ++return_entries;
       }
     }
     if (REX_LOAD_U32(entry) == kMemberAdapter[0] &&
@@ -313,8 +322,8 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
       }
     }
   }
-  REXLOG_INFO("[carbon] Registered {} standalone blr stubs ({} skipped existing, {} non-barrier epilogues preserved)",
-              return_entries, skipped_entries, non_barrier_blr);
+  REXLOG_INFO("[carbon] Registered {} original blr entries ({} existing compiled functions skipped)",
+              return_entries, skipped_entries);
   REXLOG_INFO("[carbon] Registered {} verified member adapters (variant 1), {} (variant 2)",
               member_adapters, member_adapters2);
   if (auto logger = spdlog::default_logger()) {

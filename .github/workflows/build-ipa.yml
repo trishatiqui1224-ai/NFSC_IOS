@@ -179,6 +179,7 @@ jobs:
 
       - name: Compile and Package IPA
         run: |
+          touch ios/src/ios_main.mm
           cd ios
           cmake --build --preset ios --target ipa -- -j 4 || {
             echo "[CI] Build failed! Re-running failed file with single-job diagnostics..."

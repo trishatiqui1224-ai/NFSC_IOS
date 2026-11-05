@@ -248,6 +248,13 @@ set_target_properties(nfscarbon PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info.plist"
     INSTALL_RPATH "@loader_path/Frameworks")
 
+# Force fresh build timestamp on every build: touch ios_main.mm so __DATE__ and __TIME__ update
+add_custom_target(force_build_timestamp ALL
+    COMMAND ${CMAKE_COMMAND} -E touch_nocreate "${CMAKE_CURRENT_SOURCE_DIR}/src/ios_main.mm"
+    COMMENT "Touching ios_main.mm to ensure fresh build timestamp"
+)
+add_dependencies(nfscarbon force_build_timestamp)
+
 target_compile_options(nfscarbon PRIVATE
     $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
     $<$<CXX_COMPILER_ID:Clang,AppleClang>:-gline-tables-only>
