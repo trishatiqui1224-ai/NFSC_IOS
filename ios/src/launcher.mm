@@ -668,6 +668,16 @@ NSMutableDictionary<NSString*, NSString*>* LoadSettings(const fs::path& docs) {
     s[@"nfsc_settings_v5"] = @"true";
     SaveSettings(docs, s);
   }
+  // Optimal performance and fidelity defaults for iPhone (Retina + 1x guest scale + CAS)
+  if (!s[@"nfsc_settings_v6"]) {
+    s[@"scale"] = @"1";
+    s[@"scaling"] = @"cas";
+    s[@"scene_res"] = @"retina";
+    s[@"fps_cap"] = @"60";
+    s[@"async_submits"] = @"true";
+    s[@"nfsc_settings_v6"] = @"true";
+    SaveSettings(docs, s);
+  }
 
   // Sanitize any previously saved high raw resolution strings into clean display presets
   NSString* saved_scene_res = s[@"scene_res"];

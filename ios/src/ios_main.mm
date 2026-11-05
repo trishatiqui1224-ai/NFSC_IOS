@@ -231,7 +231,7 @@ std::vector<std::string> GameArguments(const fs::path& docs, const fs::path& iso
       "--mnk_mode=false",
       "--mnk_mouse=false",
       "--ios_haptics=true",
-      "--ios_mvk_performance=true",
+      "--ios_mvk_performance=false",
       // The Xbox 360 language and country of the game's edition (USA).
       std::string("--user_language=") + NFSCARBON_GAME_LANGUAGE,
       std::string("--user_country=") + NFSCARBON_GAME_COUNTRY,
@@ -374,6 +374,8 @@ int RunGame(int argc, char* argv[], const fs::path& docs) {
   rex::InitLoggingEarly();
 
   setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", REXCVAR_GET(ios_async_submits) ? "0" : "1", 1);
+  setenv("MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS", "1", 1);
+  setenv("MVK_CONFIG_RESUME_LOST_DEVICE", "0", 1);
   setenv("MTL_CAPTURE_ENABLED", REXCVAR_GET(ios_gpu_capture) ? "1" : "0", 1);
   if (REXCVAR_GET(ios_mvk_performance)) {
     setenv("MVK_CONFIG_PERFORMANCE_TRACKING", "1", 1);

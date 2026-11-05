@@ -118,13 +118,14 @@ void RequestRateForCap(int fps_cap) {
     link = [CADisplayLink displayLinkWithTarget:target selector:@selector(tick:)];
     [link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
   }
-  // The 40 cap: 120 Hz as the minimum too (0.4.2). With 80-120 the frame
-  // trace (IPA127) showed every frame finished on an even 25 ms, but shown
-  // 16.7 / 33.3 ms apart in stretches: the screen at 60 Hz there.
-  link.preferredFrameRateRange =
-      match ? CAFrameRateRangeMake(preferred, preferred, preferred)
-            : CAFrameRateRangeMake(fps_cap == 40 ? 120.0f : high ? 80.0f : 30.0f, preferred, preferred);
-  REXLOG_INFO("[display] cap {} fps: asking for {:.0f} Hz{} (screen max {} Hz)", fps_cap, preferred,
+  // For 60 fps cap on modern ProMotion displays (iPhone 13 Pro -> iPhone 17),
+  // NEVER allow the minimum frame rate to drop to 30 Hz: that causes iOS to throttle
+  // display refresh and downclock guest vblank. Ensure min_rate is at least 60.0f.
+  const float min_rate = match ? preferred : (fps_cap >= 60 ? 60.0f : (fps_cap == 40 ? 120.0f : 30.0f));
+  const float max_rate = (UIScreen.mainScreen.maximumFramesPerSecond >= 120 && (high || fps_cap == 60)) ? 120.0f : preferred;
+  link.preferredFrameRateRange = CAFrameRateRangeMake(min_rate, preferred, max_rate);
+  REXLOG_INFO("[display] cap {} fps: asking for min {:.0f} / pref {:.0f} / max {:.0f} Hz{} (screen max {} Hz)",
+              fps_cap, min_rate, preferred, max_rate,
               match ? ", the cap's rate" : "", int(UIScreen.mainScreen.maximumFramesPerSecond));
 }
 

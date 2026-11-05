@@ -164,15 +164,15 @@ struct Control {
   bool Contains(CGPoint p) const {
     if (kind == Kind::kRectButton || kind == Kind::kTrigger) {
       // Generous slack around the rectangle, easier to hit with a thumb while racing.
-      return std::fabs(p.x - center.x) <= size.width * 0.5 + 12 &&
-             std::fabs(p.y - center.y) <= size.height * 0.5 + 12;
+      return std::fabs(p.x - center.x) <= size.width * 0.5 + 26 &&
+             std::fabs(p.y - center.y) <= size.height * 0.5 + 26;
     }
     if (kind == Kind::kSteerArrow) {
       // Generous ergonomic hit box for arrow buttons and slide-to-steer rocker
-      return std::hypot(p.x - center.x, p.y - center.y) <= radius * 1.35;
+      return std::hypot(p.x - center.x, p.y - center.y) <= radius * 1.50;
     }
     // Sticks take touches a bit beyond their ring.
-    const CGFloat r = kind == Kind::kStick ? radius * 1.35 : radius * 1.15;
+    const CGFloat r = kind == Kind::kStick ? radius * 1.40 : radius * 1.30;
     return std::hypot(p.x - center.x, p.y - center.y) <= r;
   }
 
@@ -181,7 +181,7 @@ struct Control {
   CGRect Bounds() const {
     const bool round = kind == Kind::kStick || kind == Kind::kRoundButton;
     const CGFloat w = round ? radius * 2 : size.width, h = round ? radius * 2 : size.height;
-    return CGRectInset(CGRectMake(center.x - w / 2, center.y - h / 2, w, h), -6, -6);
+    return CGRectInset(CGRectMake(center.x - w / 2, center.y - h / 2, w, h), -8, -8);
   }
 
   // Its look: pressed, where the knob is, which D-pad arrows.
@@ -195,6 +195,7 @@ struct Control {
 
 @interface NFSTouchView : UIView
 - (void)followGame;
+- (void)inputTick:(CADisplayLink*)link;
 @end
 
 @implementation NFSTouchView {
@@ -211,6 +212,9 @@ struct Control {
   float _targetSteer;
   BOOL _controlsVisible;
   UIImpactFeedbackGenerator* _haptic;
+  UISelectionFeedbackGenerator* _selectionHaptic;
+  CADisplayLink* _inputLink;
+  CFTimeInterval _lastInputTick;
   // The layout editor (launcher: Customize touch controls): touches move
   // controls instead of pressing them.
   BOOL _editing;
@@ -263,6 +267,17 @@ static CGFloat TouchOpacity() {
     _currentSteer = 0.0f;
     _targetSteer = 0.0f;
     _haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [_haptic prepare];
+    _selectionHaptic = [[UISelectionFeedbackGenerator alloc] init];
+    [_selectionHaptic prepare];
+
+    _lastInputTick = CACurrentMediaTime();
+    _inputLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(inputTick:)];
+    if (@available(iOS 15.0, *)) {
+      _inputLink.preferredFrameRateRange = CAFrameRateRangeMake(60.0f, 120.0f, 120.0f);
+    }
+    [_inputLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+
     self.layer.zPosition = 9999.0f;
     self.userInteractionEnabled = YES;
     self.multipleTouchEnabled = YES;
@@ -306,6 +321,41 @@ static CGFloat TouchOpacity() {
     }
   }
   return self;
+}
+
+- (void)dealloc {
+  [_inputLink invalidate];
+  _inputLink = nil;
+}
+
+- (void)inputTick:(CADisplayLink*)link {
+  if (_editing || !_controlsVisible) return;
+  CFTimeInterval now = link.timestamp;
+  if (_lastInputTick <= 0) _lastInputTick = now;
+  float dt = float(now - _lastInputTick);
+  _lastInputTick = now;
+  if (dt <= 0.0f || dt > 0.1f) dt = 1.0f / 60.0f;
+
+  if (_steeringMode == SteeringMode::kArrows || _targetSteer != _currentSteer) {
+    const float prev = _currentSteer;
+    // Rapid, responsive steering ramp: ~70ms to full turn, ~55ms to return to center
+    const float speed = (_targetSteer == 0.0f) ? 18.0f : 15.0f;
+    const float step = dt * speed;
+    if (std::abs(_targetSteer - _currentSteer) <= step) {
+      _currentSteer = _targetSteer;
+    } else {
+      _currentSteer += (_targetSteer > _currentSteer ? step : -step);
+    }
+
+    if ((prev < -0.05f && _currentSteer >= 0.0f) || (prev > 0.05f && _currentSteer <= 0.0f)) {
+      [_selectionHaptic selectionChanged];
+      [_selectionHaptic prepare];
+    }
+
+    if (std::abs(prev - _currentSteer) > 0.001f) {
+      [self sendState];
+    }
+  }
 }
 
 // The layout to the game's state, when it changes (ios_touch_auto_layout).
@@ -664,6 +714,49 @@ static CGFloat TouchOpacity() {
   }
 }
 
+- (void)updateSteeringRockerAt:(CGPoint)p touch:(UITouch*)t isBegan:(BOOL)isBegan {
+  int leftIdx = -1, rightIdx = -1;
+  for (size_t i = 0; i < _controls.size(); ++i) {
+    if (_controls[i].kind == Kind::kSteerArrow) {
+      if (_controls[i].steer_val < 0) leftIdx = int(i);
+      else if (_controls[i].steer_val > 0) rightIdx = int(i);
+    }
+  }
+  if (leftIdx < 0 || rightIdx < 0) return;
+
+  const CGPoint cLeft = _controls[leftIdx].center;
+  const CGPoint cRight = _controls[rightIdx].center;
+  const CGFloat midX = (cLeft.x + cRight.x) * 0.5f;
+  const CGFloat halfDist = std::max<CGFloat>(10.0f, (cRight.x - cLeft.x) * 0.5f);
+  const CGFloat deadzone = 8.0f;
+
+  if (p.x < midX - deadzone) {
+    if (!_controls[leftIdx].pressed) {
+      _controls[leftIdx].pressed = true;
+      [_selectionHaptic selectionChanged];
+      [_selectionHaptic prepare];
+    }
+    _controls[rightIdx].pressed = false;
+    [_owners setObject:@(leftIdx) forKey:t];
+    const float disp = float((midX - p.x) / halfDist);
+    _targetSteer = -std::clamp(disp, 0.45f, 1.0f);
+  } else if (p.x > midX + deadzone) {
+    if (!_controls[rightIdx].pressed) {
+      _controls[rightIdx].pressed = true;
+      [_selectionHaptic selectionChanged];
+      [_selectionHaptic prepare];
+    }
+    _controls[leftIdx].pressed = false;
+    [_owners setObject:@(rightIdx) forKey:t];
+    const float disp = float((p.x - midX) / halfDist);
+    _targetSteer = std::clamp(disp, 0.45f, 1.0f);
+  } else {
+    _controls[leftIdx].pressed = false;
+    _controls[rightIdx].pressed = false;
+    _targetSteer = 0.0f;
+  }
+}
+
 - (void)touchesBegan:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
   if (_editing) {
     const CGPoint p = [touches.anyObject locationInView:self];
@@ -710,13 +803,38 @@ static CGFloat TouchOpacity() {
     }
     const int i = [self controlAt:p];
     if (i < 0) {
+      // Check if tap was in the bridge between the two steer arrows
+      if (_driving && _steeringMode == SteeringMode::kArrows) {
+        int leftIdx = -1, rightIdx = -1;
+        for (size_t k = 0; k < _controls.size(); ++k) {
+          if (_controls[k].kind == Kind::kSteerArrow) {
+            if (_controls[k].steer_val < 0) leftIdx = int(k);
+            else if (_controls[k].steer_val > 0) rightIdx = int(k);
+          }
+        }
+        if (leftIdx >= 0 && rightIdx >= 0) {
+          const CGPoint cLeft = _controls[leftIdx].center;
+          const CGPoint cRight = _controls[rightIdx].center;
+          const CGFloat minY = std::min(cLeft.y, cRight.y) - _controls[leftIdx].radius * 1.5;
+          const CGFloat maxY = std::max(cLeft.y, cRight.y) + _controls[leftIdx].radius * 1.5;
+          if (p.x >= cLeft.x - _controls[leftIdx].radius * 1.5 && p.x <= cRight.x + _controls[rightIdx].radius * 1.5 &&
+              p.y >= minY && p.y <= maxY) {
+            [self updateSteeringRockerAt:p touch:t isBegan:YES];
+            continue;
+          }
+        }
+      }
+      continue;
+    }
+    if (_driving && _steeringMode == SteeringMode::kArrows && _controls[size_t(i)].kind == Kind::kSteerArrow) {
+      [self updateSteeringRockerAt:p touch:t isBegan:YES];
       continue;
     }
     [_owners setObject:@(i) forKey:t];
     Control& c = _controls[size_t(i)];
     c.pressed = true;
     [self updateControl:c at:p];
-    haptic = haptic || c.kind == Kind::kRoundButton || c.kind == Kind::kRectButton;
+    haptic = haptic || c.kind == Kind::kRoundButton || c.kind == Kind::kRectButton || c.kind == Kind::kTrigger;
   }
   if (haptic) {
     IOSHaptics_TriggerTap(0.5f);
@@ -736,10 +854,45 @@ static CGFloat TouchOpacity() {
     return;
   }
   for (UITouch* t in touches) {
-    NSNumber* owner = [_owners objectForKey:t];
-    if (owner) {
-      [self updateControl:_controls[owner.unsignedIntegerValue] at:[t locationInView:self]];
+    const CGPoint p = [t locationInView:self];
+    NSNumber* ownerNum = [_owners objectForKey:t];
+    if (!ownerNum) continue;
+    size_t ownerIdx = ownerNum.unsignedIntegerValue;
+    if (ownerIdx >= _controls.size()) continue;
+
+    Control& currentCtrl = _controls[ownerIdx];
+
+    // 1. Steering Rocker handling for Arrows
+    if (_driving && _steeringMode == SteeringMode::kArrows && currentCtrl.kind == Kind::kSteerArrow) {
+      [self updateSteeringRockerAt:p touch:t isBegan:NO];
+      continue;
     }
+
+    // 2. Dynamic Thumb Transfer for Pedals & Actions
+    if (_driving && (currentCtrl.kind == Kind::kTrigger || currentCtrl.kind == Kind::kRoundButton)) {
+      int newIdx = [self controlAt:p];
+      if (newIdx >= 0 && size_t(newIdx) != ownerIdx) {
+        Control& newCtrl = _controls[size_t(newIdx)];
+        if (newCtrl.kind == Kind::kTrigger || newCtrl.kind == Kind::kRoundButton) {
+          bool stillHeld = false;
+          for (UITouch* other in _owners) {
+            if (other != t && [_owners objectForKey:other].unsignedIntegerValue == ownerIdx) {
+              stillHeld = true;
+              break;
+            }
+          }
+          if (!stillHeld) {
+            currentCtrl.pressed = false;
+          }
+          [_owners setObject:@(newIdx) forKey:t];
+          newCtrl.pressed = true;
+          [_haptic impactOccurred];
+          ownerIdx = size_t(newIdx);
+        }
+      }
+    }
+
+    [self updateControl:_controls[ownerIdx] at:p];
   }
   [self sendState];
 }
@@ -750,13 +903,17 @@ static CGFloat TouchOpacity() {
     if (!owner) {
       continue;
     }
+    const size_t ownerIdx = owner.unsignedIntegerValue;
     [_owners removeObjectForKey:t];
-    Control& c = _controls[owner.unsignedIntegerValue];
+    if (ownerIdx >= _controls.size()) continue;
+
+    Control& c = _controls[ownerIdx];
     // Another finger may still hold the same control.
     bool still_held = false;
     for (UITouch* other in _owners) {
-      if ([_owners objectForKey:other].unsignedIntegerValue == owner.unsignedIntegerValue) {
+      if ([_owners objectForKey:other].unsignedIntegerValue == ownerIdx) {
         still_held = true;
+        break;
       }
     }
     if (!still_held) {
@@ -766,6 +923,18 @@ static CGFloat TouchOpacity() {
       if (c.kind == Kind::kStick && c.axis == 0) {
         _targetSteer = 0.0f;
         _currentSteer = 0.0f;
+      } else if (c.kind == Kind::kSteerArrow) {
+        bool otherArrowHeld = false;
+        for (const Control& otherCtrl : _controls) {
+          if (otherCtrl.kind == Kind::kSteerArrow && otherCtrl.pressed) {
+            otherArrowHeld = true;
+            _targetSteer = otherCtrl.steer_val;
+            break;
+          }
+        }
+        if (!otherArrowHeld) {
+          _targetSteer = 0.0f;
+        }
       }
     }
   }
@@ -841,26 +1010,14 @@ static CGFloat TouchOpacity() {
     }
   }
   if (arrow_active) {
-    _targetSteer = std::clamp(arrow_steer, -1.0f, 1.0f);
+    if (_targetSteer == 0.0f) {
+      _targetSteer = std::clamp(arrow_steer, -1.0f, 1.0f);
+    }
   } else if (!stick_active) {
     _targetSteer = 0.0f;
-    _currentSteer = 0.0f;
   }
 
-  // Response tuning: Progressive Smooth (0.35) -> Digital Direct (1.0)
-  const float prevSteer = _currentSteer;
-  const float responseRate = 0.72f;
-  _currentSteer = _currentSteer * (1.0f - responseRate) + _targetSteer * responseRate;
-  if (std::abs(_currentSteer) < 0.02f && std::abs(_targetSteer) < 0.02f) {
-    _currentSteer = 0.0f;
-  }
-
-  // CoreHaptics crossover feedback when crossing deadzone
-  if ((prevSteer < -0.1f && _currentSteer >= 0.0f) || (prevSteer > 0.1f && _currentSteer <= 0.0f)) {
-    IOSHaptics_TriggerTap(0.5f);
-  }
-
-  if (_steeringMode == SteeringMode::kArrows || arrow_active) {
+  if (_steeringMode == SteeringMode::kArrows || arrow_active || (!stick_active && _currentSteer != 0.0f)) {
     axes[0] = _currentSteer;
   }
 
@@ -894,13 +1051,17 @@ static CGFloat TouchOpacity() {
 
 // A label no wider than `fit`: a long word on a small button is made smaller.
 - (void)drawLabel:(NSString*)text at:(CGPoint)p size:(CGFloat)size fit:(CGFloat)fit {
-  NSMutableParagraphStyle* centered = [[NSMutableParagraphStyle alloc] init];
-  centered.alignment = NSTextAlignmentCenter;
+  static NSMutableParagraphStyle* centered = nil;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    centered = [[NSMutableParagraphStyle alloc] init];
+    centered.alignment = NSTextAlignmentCenter;
+  });
   // Two-line labels ("SPEED\nBREAKER") a little smaller.
   const bool two_lines = [text containsString:@"\n"];
   NSDictionary* attrs = @{
     NSFontAttributeName : [UIFont boldSystemFontOfSize:two_lines ? size * 0.55 : size],
-    NSForegroundColorAttributeName : [UIColor colorWithWhite:1 alpha:0.85],
+    NSForegroundColorAttributeName : [UIColor colorWithWhite:1 alpha:0.92],
     NSParagraphStyleAttributeName : centered
   };
   CGSize s = [text boundingRectWithSize:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)
@@ -1020,9 +1181,33 @@ static CGFloat TouchOpacity() {
 
 - (void)drawRect:(CGRect)dirty {
   if (_nativeMode && !_drawingNative) return;  // drawn into the native frame instead
-  UIColor* fill = [UIColor colorWithWhite:0.05 alpha:0.40];
-  UIColor* pressed = [UIColor colorWithRed:0.44 green:0.45 blue:0.20 alpha:0.75];
-  UIColor* stroke = [UIColor colorWithWhite:1 alpha:0.55];
+  UIColor* fill = [UIColor colorWithWhite:0.07 alpha:0.48];
+  UIColor* stroke = [UIColor colorWithWhite:1.0 alpha:0.45];
+
+  auto ActiveFillForControl = [](const Control& c) -> UIColor* {
+    if (c.kind == Kind::kTrigger) {
+      if ([c.label isEqualToString:@"GAS"]) {
+        return [UIColor colorWithRed:0.12 green:0.82 blue:0.38 alpha:0.80];  // Vibrant emerald
+      }
+      return [UIColor colorWithRed:0.95 green:0.20 blue:0.22 alpha:0.80];  // Vibrant ruby
+    }
+    if ([c.label isEqualToString:@"NOS"]) {
+      return [UIColor colorWithRed:0.00 green:0.72 blue:1.00 alpha:0.85];  // Electric blue
+    }
+    if ([c.label rangeOfString:@"HAND"].location != NSNotFound) {
+      return [UIColor colorWithRed:1.00 green:0.32 blue:0.16 alpha:0.85];  // Radiant Coral
+    }
+    if ([c.label rangeOfString:@"SPEED"].location != NSNotFound) {
+      return [UIColor colorWithRed:1.00 green:0.75 blue:0.05 alpha:0.85];  // Carbon Amber
+    }
+    if ([c.label rangeOfString:@"WINGMAN"].location != NSNotFound) {
+      return [UIColor colorWithRed:0.78 green:0.28 blue:1.00 alpha:0.85];  // Signature Purple
+    }
+    if (c.kind == Kind::kSteerArrow) {
+      return [UIColor colorWithRed:0.18 green:0.65 blue:1.00 alpha:0.85];  // Crisp Neon Blue
+    }
+    return [UIColor colorWithRed:0.25 green:0.65 blue:0.95 alpha:0.75];
+  };
 
   if (_editing) {
     // The editor: the selected control outlined.
@@ -1106,9 +1291,10 @@ static CGFloat TouchOpacity() {
                                       c.center.y + c.knob.y * c.radius * 0.6);
         UIBezierPath* knob =
             [UIBezierPath bezierPathWithOvalInRect:CGRectMake(k.x - kr, k.y - kr, kr * 2, kr * 2)];
-        [(c.pressed ? pressed : [UIColor colorWithWhite:0.3 alpha:0.6]) setFill];
+        [(c.pressed ? [UIColor colorWithRed:0.18 green:0.65 blue:1.00 alpha:0.85] : [UIColor colorWithWhite:0.35 alpha:0.65]) setFill];
         [knob fill];
-        [stroke setStroke];
+        [(c.pressed ? [UIColor whiteColor] : stroke) setStroke];
+        knob.lineWidth = c.pressed ? 2.5 : 1.5;
         [knob stroke];
         break;
       }
@@ -1126,9 +1312,10 @@ static CGFloat TouchOpacity() {
         };
         for (const auto& a : arms) {
           UIBezierPath* path = [UIBezierPath bezierPathWithRoundedRect:a.r cornerRadius:4];
-          [((c.dpad_bits & a.bit) ? pressed : fill) setFill];
+          [((c.dpad_bits & a.bit) ? [UIColor colorWithRed:0.20 green:0.65 blue:1.0 alpha:0.85] : fill) setFill];
           [path fill];
-          [stroke setStroke];
+          [((c.dpad_bits & a.bit) ? [UIColor whiteColor] : stroke) setStroke];
+          path.lineWidth = (c.dpad_bits & a.bit) ? 2.2 : 1.0;
           [path stroke];
           [self drawLabel:a.l
                        at:CGPointMake(CGRectGetMidX(a.r), CGRectGetMidY(a.r))
@@ -1140,9 +1327,9 @@ static CGFloat TouchOpacity() {
         UIBezierPath* path = [UIBezierPath
             bezierPathWithOvalInRect:CGRectInset(CGRectMake(c.center.x, c.center.y, 0, 0),
                                                  -c.radius, -c.radius)];
-        [(c.pressed ? pressed : fill) setFill];
+        [(c.pressed ? ActiveFillForControl(c) : fill) setFill];
         [path fill];
-        [stroke setStroke];
+        [(c.pressed ? [UIColor whiteColor] : stroke) setStroke];
         path.lineWidth = c.pressed ? 2.5 : 1.5;
         [path stroke];
         [self drawLabel:c.label at:c.center size:c.radius * 0.95];
@@ -1152,10 +1339,10 @@ static CGFloat TouchOpacity() {
         UIBezierPath* path = [UIBezierPath
             bezierPathWithOvalInRect:CGRectInset(CGRectMake(c.center.x, c.center.y, 0, 0),
                                                  -c.radius, -c.radius)];
-        [(c.pressed ? pressed : fill) setFill];
+        [(c.pressed ? ActiveFillForControl(c) : fill) setFill];
         [path fill];
-        [stroke setStroke];
-        path.lineWidth = 1.5;
+        [(c.pressed ? [UIColor whiteColor] : stroke) setStroke];
+        path.lineWidth = c.pressed ? 2.2 : 1.5;
         [path stroke];
         [self drawLabel:c.label at:c.center size:c.radius * 0.8 fit:c.radius * 1.6];
         break;
@@ -1166,10 +1353,10 @@ static CGFloat TouchOpacity() {
                                     c.size.width, c.size.height);
         UIBezierPath* path = [UIBezierPath bezierPathWithRoundedRect:r
                                                         cornerRadius:std::min(c.size.width, c.size.height) * 0.3];
-        [(c.pressed ? pressed : fill) setFill];
+        [(c.pressed ? ActiveFillForControl(c) : fill) setFill];
         [path fill];
-        [stroke setStroke];
-        path.lineWidth = 1.5;
+        [(c.pressed ? [UIColor whiteColor] : stroke) setStroke];
+        path.lineWidth = c.pressed ? 2.5 : 1.5;
         [path stroke];
         [self drawLabel:c.label
                      at:c.center
