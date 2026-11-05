@@ -724,6 +724,7 @@ namespace rex::runtime {
   }
 
   tl_last_indirect_target = guest_address;
+  RecordPPCBreadcrumb(guest_address, 0, 0);
   if (Runtime* rt = Runtime::instance()) {
     if (FunctionDispatcher* d = rt->function_dispatcher()) {
       if (::PPCFunc* f = d->GetFunction(guest_address)) {
@@ -731,7 +732,6 @@ namespace rex::runtime {
       }
     }
   }
-  RecordPPCBreadcrumb(guest_address, 0, 0);
   return &NoopTrap;
 }
 

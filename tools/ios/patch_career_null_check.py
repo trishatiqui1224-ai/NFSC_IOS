@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Safeguard Career mode and Quick Race transitions:
-1. sub_825F6A78 (nfscarbon_recomp.20.cpp): Prevents read of guest 0x00000000 when *(r31 + 24) is NULL.
+1. sub_825F6A78 (nfscarbon_recomp.20.cpp): Prevents read of guest 0x00000000 across car/camera handoff.
 2. sub_826D91C0 (nfscarbon_recomp.103.cpp): Prevents write to guest 0x00000000 when command buffer r3 is NULL.
 3. sub_82131EA8 (nfscarbon_recomp.94.cpp): Prevents read of guest 0x00000000 when r3 or r11 is NULL.
 """
@@ -13,11 +13,138 @@ TARGET_20 = "generated/default/nfscarbon_recomp.20.cpp"
 TARGET_103 = "generated/default/nfscarbon_recomp.103.cpp"
 TARGET_94 = "generated/default/nfscarbon_recomp.94.cpp"
 
+# Raw unpatched block in sub_825F6A78 (between 0x825F6B00 and 0x825F6B74)
+OLD_CODE_20_RAW = """\t// lwz r11,24(r31)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r31.u32 + 24);
+\t// lwz r21,0(r11)
+\tctx.r21.u64 = REX_LOAD_U32(ctx.r11.u32 + 0);
+\t// cmpwi cr6,r21,0
+\tctx.cr6.compare<int32_t>(ctx.r21.s32, 0, ctx.xer);
+\t// ble cr6,0x825f7788
+\tif (!ctx.cr6.gt) goto loc_825F7788;
+\t// lwz r11,0(r24)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r24.u32 + 0);
+\t// addi r4,r1,96
+\tctx.r4.s64 = ctx.r1.s64 + 96;
+\t// lwz r11,52(r11)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 52);
+\t// mtctr r11
+\tctx.ctr.u64 = ctx.r11.u64;
+\t// bctrl 
+\tctx.lr = 0x825F6B30;
+\tREX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+\t// lwz r11,0(r24)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r24.u32 + 0);
+\t// mr r3,r24
+\tctx.r3.u64 = ctx.r24.u64;
+\t// lwz r11,36(r11)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 36);
+\t// mtctr r11
+\tctx.ctr.u64 = ctx.r11.u64;
+\t// bctrl 
+\tctx.lr = 0x825F6B44;
+\tREX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+\t// mr r11,r3
+\tctx.r11.u64 = ctx.r3.u64;
+\t// lwz r10,0(r24)
+\tctx.r10.u64 = REX_LOAD_U32(ctx.r24.u32 + 0);
+\t// mr r3,r24
+\tctx.r3.u64 = ctx.r24.u64;
+\t// lwz r9,0(r11)
+\tctx.r9.u64 = REX_LOAD_U32(ctx.r11.u32 + 0);
+\t// lwz r10,32(r10)
+\tctx.r10.u64 = REX_LOAD_U32(ctx.r10.u32 + 32);
+\t// stw r9,112(r1)
+\tREX_STORE_U32(ctx.r1.u32 + 112, ctx.r9.u32);
+\t// lwz r9,4(r11)
+\tctx.r9.u64 = REX_LOAD_U32(ctx.r11.u32 + 4);
+\t// lwz r11,8(r11)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 8);
+\t// stw r9,116(r1)
+\tREX_STORE_U32(ctx.r1.u32 + 116, ctx.r9.u32);
+\t// stw r11,120(r1)
+\tREX_STORE_U32(ctx.r1.u32 + 120, ctx.r11.u32);
+\t// mtctr r10
+\tctx.ctr.u64 = ctx.r10.u64;
+\t// bctrl 
+\tctx.lr = 0x825F6B74;
+\tREX_CALL_INDIRECT_FUNC(ctx.ctr.u32);"""
+
+# Partially patched block (from initial single-guard patch)
+OLD_CODE_20_PARTIAL = OLD_CODE_20_RAW.replace(
+    "\tctx.r11.u64 = REX_LOAD_U32(ctx.r31.u32 + 24);\n\t// lwz r21,0(r11)",
+    "\tctx.r11.u64 = REX_LOAD_U32(ctx.r31.u32 + 24);\n\tif (!ctx.r11.u32) goto loc_825F7788;\n\t// lwz r21,0(r11)"
+)
+
+# Fully hardened block with null guards on r11, r24, r10, and r3
+PATCHED_CODE_20 = """\t// lwz r11,24(r31)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r31.u32 + 24);
+\tif (!ctx.r11.u32) goto loc_825F7788;
+\t// lwz r21,0(r11)
+\tctx.r21.u64 = REX_LOAD_U32(ctx.r11.u32 + 0);
+\t// cmpwi cr6,r21,0
+\tctx.cr6.compare<int32_t>(ctx.r21.s32, 0, ctx.xer);
+\t// ble cr6,0x825f7788
+\tif (!ctx.cr6.gt) goto loc_825F7788;
+\t// lwz r11,0(r24)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r24.u32 + 0);
+\tif (!ctx.r11.u32) goto loc_825F7788;
+\t// addi r4,r1,96
+\tctx.r4.s64 = ctx.r1.s64 + 96;
+\t// lwz r11,52(r11)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 52);
+\t// mtctr r11
+\tctx.ctr.u64 = ctx.r11.u64;
+\t// bctrl 
+\tctx.lr = 0x825F6B30;
+\tREX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+\t// lwz r11,0(r24)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r24.u32 + 0);
+\tif (!ctx.r11.u32) goto loc_825F7788;
+\t// mr r3,r24
+\tctx.r3.u64 = ctx.r24.u64;
+\t// lwz r11,36(r11)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 36);
+\t// mtctr r11
+\tctx.ctr.u64 = ctx.r11.u64;
+\t// bctrl 
+\tctx.lr = 0x825F6B44;
+\tREX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+\t// mr r11,r3
+\tctx.r11.u64 = ctx.r3.u64;
+\tif (!ctx.r11.u32) goto loc_825F7788;
+\t// lwz r10,0(r24)
+\tctx.r10.u64 = REX_LOAD_U32(ctx.r24.u32 + 0);
+\tif (!ctx.r10.u32) goto loc_825F7788;
+\t// mr r3,r24
+\tctx.r3.u64 = ctx.r24.u64;
+\t// lwz r9,0(r11)
+\tctx.r9.u64 = REX_LOAD_U32(ctx.r11.u32 + 0);
+\t// lwz r10,32(r10)
+\tctx.r10.u64 = REX_LOAD_U32(ctx.r10.u32 + 32);
+\t// stw r9,112(r1)
+\tREX_STORE_U32(ctx.r1.u32 + 112, ctx.r9.u32);
+\t// lwz r9,4(r11)
+\tctx.r9.u64 = REX_LOAD_U32(ctx.r11.u32 + 4);
+\t// lwz r11,8(r11)
+\tctx.r11.u64 = REX_LOAD_U32(ctx.r11.u32 + 8);
+\t// stw r9,116(r1)
+\tREX_STORE_U32(ctx.r1.u32 + 116, ctx.r9.u32);
+\t// stw r11,120(r1)
+\tREX_STORE_U32(ctx.r1.u32 + 120, ctx.r11.u32);
+\t// mtctr r10
+\tctx.ctr.u64 = ctx.r10.u64;
+\t// bctrl 
+\tctx.lr = 0x825F6B74;
+\tREX_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+\tif (!ctx.r3.u32) goto loc_825F7788;"""
+
+# Minimal fallback anchor
 OLD_CODE_20 = """\t// lwz r11,24(r31)
 \tctx.r11.u64 = REX_LOAD_U32(ctx.r31.u32 + 24);
 \t// lwz r21,0(r11)"""
 
-PATCHED_CODE_20 = """\t// lwz r11,24(r31)
+PATCHED_CODE_20_MINIMAL = """\t// lwz r11,24(r31)
 \tctx.r11.u64 = REX_LOAD_U32(ctx.r31.u32 + 24);
 \tif (!ctx.r11.u32) goto loc_825F7788;
 \t// lwz r21,0(r11)"""
@@ -111,12 +238,20 @@ def apply_patch(root_dir: pathlib.Path) -> bool:
     target_20 = root_dir / TARGET_20
     if target_20.is_file():
         text_20 = target_20.read_text(encoding="utf-8")
-        if "if (!ctx.r11.u32) goto loc_825F7788;" in text_20:
-            print("[patch_career_null_check] Already applied in nfscarbon_recomp.20.cpp")
-        elif OLD_CODE_20 in text_20:
-            text_20 = text_20.replace(OLD_CODE_20, PATCHED_CODE_20, 1)
+        if "if (!ctx.r3.u32) goto loc_825F7788;" in text_20 and "sub_825F6A78" in text_20:
+            print("[patch_career_null_check] Already fully applied in nfscarbon_recomp.20.cpp")
+        elif OLD_CODE_20_PARTIAL in text_20:
+            text_20 = text_20.replace(OLD_CODE_20_PARTIAL, PATCHED_CODE_20, 1)
             target_20.write_text(text_20, encoding="utf-8")
-            print("[patch_career_null_check] Successfully applied null-check in sub_825F6A78")
+            print("[patch_career_null_check] Successfully applied hardened null-checks in sub_825F6A78")
+        elif OLD_CODE_20_RAW in text_20:
+            text_20 = text_20.replace(OLD_CODE_20_RAW, PATCHED_CODE_20, 1)
+            target_20.write_text(text_20, encoding="utf-8")
+            print("[patch_career_null_check] Successfully applied hardened null-checks in sub_825F6A78")
+        elif OLD_CODE_20 in text_20:
+            text_20 = text_20.replace(OLD_CODE_20, PATCHED_CODE_20_MINIMAL, 1)
+            target_20.write_text(text_20, encoding="utf-8")
+            print("[patch_career_null_check] Applied minimal null-check in sub_825F6A78")
         else:
             print("[patch_career_null_check] WARNING: Anchor not found in nfscarbon_recomp.20.cpp")
             success = False

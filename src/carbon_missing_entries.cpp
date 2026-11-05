@@ -282,40 +282,34 @@ void CarbonRegisterMissingEntries(rex::runtime::FunctionDispatcher* dispatcher,
     }
     if (REX_LOAD_U32(entry) == kMemberAdapter[0] &&
         entry + kMemberAdapter.size() * 4 <= PPCImageConfig.code_base + PPCImageConfig.code_size) {
-      if (dispatcher->GetFunction(entry)) {
-        ++skipped_entries;
-      } else {
-        bool matches = true;
-        for (size_t index = 1; index < kMemberAdapter.size(); ++index) {
-          if (REX_LOAD_U32(entry + static_cast<uint32_t>(index * 4)) != kMemberAdapter[index]) {
-            matches = false;
-            break;
-          }
+      bool matches = true;
+      for (size_t index = 1; index < kMemberAdapter.size(); ++index) {
+        if (REX_LOAD_U32(entry + static_cast<uint32_t>(index * 4)) != kMemberAdapter[index]) {
+          matches = false;
+          break;
         }
-        if (matches) {
-          if (!dispatcher->SetFunction(entry, &Carbon_MemberAdapter))
-            REX_FATAL("Could not register original Carbon member adapter");
-          ++member_adapters;
-        }
+      }
+      if (matches) {
+        // ALWAYS overwrite PPCFuncMapping: rexglue cannot compile bctr tail-call adapters
+        if (!dispatcher->SetFunction(entry, &Carbon_MemberAdapter))
+          REX_FATAL("Could not register original Carbon member adapter");
+        ++member_adapters;
       }
     }
     if (REX_LOAD_U32(entry) == kMemberAdapter2[0] &&
         entry + kMemberAdapter2.size() * 4 <= PPCImageConfig.code_base + PPCImageConfig.code_size) {
-      if (dispatcher->GetFunction(entry)) {
-        ++skipped_entries;
-      } else {
-        bool matches = true;
-        for (size_t index = 1; index < kMemberAdapter2.size(); ++index) {
-          if (REX_LOAD_U32(entry + static_cast<uint32_t>(index * 4)) != kMemberAdapter2[index]) {
-            matches = false;
-            break;
-          }
+      bool matches = true;
+      for (size_t index = 1; index < kMemberAdapter2.size(); ++index) {
+        if (REX_LOAD_U32(entry + static_cast<uint32_t>(index * 4)) != kMemberAdapter2[index]) {
+          matches = false;
+          break;
         }
-        if (matches) {
-          if (!dispatcher->SetFunction(entry, &Carbon_MemberAdapter2))
-            REX_FATAL("Could not register original Carbon member adapter 2");
-          ++member_adapters2;
-        }
+      }
+      if (matches) {
+        // ALWAYS overwrite PPCFuncMapping: rexglue cannot compile bctr tail-call adapters
+        if (!dispatcher->SetFunction(entry, &Carbon_MemberAdapter2))
+          REX_FATAL("Could not register original Carbon member adapter 2");
+        ++member_adapters2;
       }
     }
   }
