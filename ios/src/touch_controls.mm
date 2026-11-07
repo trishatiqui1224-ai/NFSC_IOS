@@ -163,16 +163,17 @@ struct Control {
 
   bool Contains(CGPoint p) const {
     if (kind == Kind::kRectButton || kind == Kind::kTrigger) {
-      // Generous slack around the rectangle, easier to hit with a thumb while racing.
-      return std::fabs(p.x - center.x) <= size.width * 0.5 + 26 &&
-             std::fabs(p.y - center.y) <= size.height * 0.5 + 26;
+      // Ergonomic margin around rectangles/pedals: enough for comfortable thumb contact
+      // without overlapping adjacent buttons
+      return std::fabs(p.x - center.x) <= size.width * 0.5 + 10 &&
+             std::fabs(p.y - center.y) <= size.height * 0.5 + 10;
     }
     if (kind == Kind::kSteerArrow) {
-      // Generous ergonomic hit box for arrow buttons and slide-to-steer rocker
-      return std::hypot(p.x - center.x, p.y - center.y) <= radius * 1.50;
+      // Ergonomic hit box for arrow buttons
+      return std::hypot(p.x - center.x, p.y - center.y) <= radius * 1.35;
     }
-    // Sticks take touches a bit beyond their ring.
-    const CGFloat r = kind == Kind::kStick ? radius * 1.40 : radius * 1.30;
+    // Sticks and round buttons take touches with comfortable margin
+    const CGFloat r = kind == Kind::kStick ? radius * 1.35 : radius * 1.25;
     return std::hypot(p.x - center.x, p.y - center.y) <= r;
   }
 
@@ -336,10 +337,18 @@ static CGFloat TouchOpacity() {
   _lastInputTick = now;
   if (dt <= 0.0f || dt > 0.1f) dt = 1.0f / 60.0f;
 
-  if (_steeringMode == SteeringMode::kArrows || _targetSteer != _currentSteer) {
+  if (_steeringMode == SteeringMode::kStick || _steeringMode == SteeringMode::kWheel) {
+    if (_currentSteer != _targetSteer) {
+      _currentSteer = _targetSteer;
+      [self sendState];
+    }
+    return;
+  }
+
+  if (_steeringMode == SteeringMode::kArrows) {
     const float prev = _currentSteer;
-    // Rapid, responsive steering ramp: ~70ms to full turn, ~55ms to return to center
-    const float speed = (_targetSteer == 0.0f) ? 18.0f : 15.0f;
+    // Ultra-responsive steering ramp: ~45ms to full turn, ~35ms to return to center
+    const float speed = (_targetSteer == 0.0f) ? 28.0f : 22.0f;
     const float step = dt * speed;
     if (std::abs(_targetSteer - _currentSteer) <= step) {
       _currentSteer = _targetSteer;
@@ -352,7 +361,7 @@ static CGFloat TouchOpacity() {
       [_selectionHaptic prepare];
     }
 
-    if (std::abs(prev - _currentSteer) > 0.001f) {
+    if (std::abs(prev - _currentSteer) > 0.0005f || (_currentSteer == 0.0f && prev != 0.0f)) {
       [self sendState];
     }
   }
@@ -654,12 +663,18 @@ static CGFloat TouchOpacity() {
 }
 
 - (int)controlAt:(CGPoint)p {
+  int best = -1;
+  CGFloat bestDist = CGFLOAT_MAX;
   for (size_t i = 0; i < _controls.size(); ++i) {
     if (_controls[i].Contains(p)) {
-      return int(i);
+      CGFloat dist = std::hypot(p.x - _controls[i].center.x, p.y - _controls[i].center.y);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = int(i);
+      }
     }
   }
-  return -1;
+  return best;
 }
 
 - (void)updateControl:(Control&)c at:(CGPoint)p {
@@ -726,31 +741,54 @@ static CGFloat TouchOpacity() {
 
   const CGPoint cLeft = _controls[leftIdx].center;
   const CGPoint cRight = _controls[rightIdx].center;
+  const CGFloat rLeft = _controls[leftIdx].radius;
+  const CGFloat rRight = _controls[rightIdx].radius;
   const CGFloat midX = (cLeft.x + cRight.x) * 0.5f;
-  const CGFloat halfDist = std::max<CGFloat>(10.0f, (cRight.x - cLeft.x) * 0.5f);
   const CGFloat deadzone = 8.0f;
 
-  if (p.x < midX - deadzone) {
+  // Always keep touch tracked in _owners so it is cleanly removed on lift
+  [_owners setObject:@(p.x <= midX ? leftIdx : rightIdx) forKey:t];
+
+  // Direct hit on left button or left of center
+  if (p.x <= cLeft.x || std::hypot(p.x - cLeft.x, p.y - cLeft.y) <= rLeft) {
     if (!_controls[leftIdx].pressed) {
       _controls[leftIdx].pressed = true;
       [_selectionHaptic selectionChanged];
       [_selectionHaptic prepare];
     }
     _controls[rightIdx].pressed = false;
-    [_owners setObject:@(leftIdx) forKey:t];
-    const float disp = float((midX - p.x) / halfDist);
-    _targetSteer = -std::clamp(disp, 0.45f, 1.0f);
-  } else if (p.x > midX + deadzone) {
+    _targetSteer = -1.0f;
+  } else if (p.x >= cRight.x || std::hypot(p.x - cRight.x, p.y - cRight.y) <= rRight) {
+    // Direct hit on right button or right of center
     if (!_controls[rightIdx].pressed) {
       _controls[rightIdx].pressed = true;
       [_selectionHaptic selectionChanged];
       [_selectionHaptic prepare];
     }
     _controls[leftIdx].pressed = false;
-    [_owners setObject:@(rightIdx) forKey:t];
-    const float disp = float((p.x - midX) / halfDist);
-    _targetSteer = std::clamp(disp, 0.45f, 1.0f);
+    _targetSteer = 1.0f;
+  } else if (p.x < midX - deadzone) {
+    // Left bridge proportional zone
+    if (!_controls[leftIdx].pressed) {
+      _controls[leftIdx].pressed = true;
+      [_selectionHaptic selectionChanged];
+      [_selectionHaptic prepare];
+    }
+    _controls[rightIdx].pressed = false;
+    const float fraction = float((midX - deadzone - p.x) / (midX - deadzone - cLeft.x));
+    _targetSteer = -std::clamp(fraction, 0.25f, 1.0f);
+  } else if (p.x > midX + deadzone) {
+    // Right bridge proportional zone
+    if (!_controls[rightIdx].pressed) {
+      _controls[rightIdx].pressed = true;
+      [_selectionHaptic selectionChanged];
+      [_selectionHaptic prepare];
+    }
+    _controls[leftIdx].pressed = false;
+    const float fraction = float((p.x - (midX + deadzone)) / (cRight.x - (midX + deadzone)));
+    _targetSteer = std::clamp(fraction, 0.25f, 1.0f);
   } else {
+    // Deadzone in the center
     _controls[leftIdx].pressed = false;
     _controls[rightIdx].pressed = false;
     _targetSteer = 0.0f;
@@ -815,9 +853,9 @@ static CGFloat TouchOpacity() {
         if (leftIdx >= 0 && rightIdx >= 0) {
           const CGPoint cLeft = _controls[leftIdx].center;
           const CGPoint cRight = _controls[rightIdx].center;
-          const CGFloat minY = std::min(cLeft.y, cRight.y) - _controls[leftIdx].radius * 1.5;
-          const CGFloat maxY = std::max(cLeft.y, cRight.y) + _controls[leftIdx].radius * 1.5;
-          if (p.x >= cLeft.x - _controls[leftIdx].radius * 1.5 && p.x <= cRight.x + _controls[rightIdx].radius * 1.5 &&
+          const CGFloat minY = std::min(cLeft.y, cRight.y) - _controls[leftIdx].radius * 1.35;
+          const CGFloat maxY = std::max(cLeft.y, cRight.y) + _controls[leftIdx].radius * 1.35;
+          if (p.x >= cLeft.x - _controls[leftIdx].radius * 1.35 && p.x <= cRight.x + _controls[rightIdx].radius * 1.35 &&
               p.y >= minY && p.y <= maxY) {
             [self updateSteeringRockerAt:p touch:t isBegan:YES];
             continue;
@@ -868,30 +906,7 @@ static CGFloat TouchOpacity() {
       continue;
     }
 
-    // 2. Dynamic Thumb Transfer for Pedals & Actions
-    if (_driving && (currentCtrl.kind == Kind::kTrigger || currentCtrl.kind == Kind::kRoundButton)) {
-      int newIdx = [self controlAt:p];
-      if (newIdx >= 0 && size_t(newIdx) != ownerIdx) {
-        Control& newCtrl = _controls[size_t(newIdx)];
-        if (newCtrl.kind == Kind::kTrigger || newCtrl.kind == Kind::kRoundButton) {
-          bool stillHeld = false;
-          for (UITouch* other in _owners) {
-            if (other != t && [_owners objectForKey:other].unsignedIntegerValue == ownerIdx) {
-              stillHeld = true;
-              break;
-            }
-          }
-          if (!stillHeld) {
-            currentCtrl.pressed = false;
-          }
-          [_owners setObject:@(newIdx) forKey:t];
-          newCtrl.pressed = true;
-          [_haptic impactOccurred];
-          ownerIdx = size_t(newIdx);
-        }
-      }
-    }
-
+    // Maintain 1:1 touch assignment to prevent button sticking and fighting
     [self updateControl:_controls[ownerIdx] at:p];
   }
   [self sendState];
@@ -899,45 +914,50 @@ static CGFloat TouchOpacity() {
 
 - (void)endTouches:(NSSet<UITouch*>*)touches {
   for (UITouch* t in touches) {
-    NSNumber* owner = [_owners objectForKey:t];
-    if (!owner) {
-      continue;
-    }
-    const size_t ownerIdx = owner.unsignedIntegerValue;
     [_owners removeObjectForKey:t];
-    if (ownerIdx >= _controls.size()) continue;
+  }
 
-    Control& c = _controls[ownerIdx];
-    // Another finger may still hold the same control.
-    bool still_held = false;
-    for (UITouch* other in _owners) {
-      if ([_owners objectForKey:other].unsignedIntegerValue == ownerIdx) {
-        still_held = true;
+  // Full state reconciliation against active touches in _owners:
+  // Any control not currently held by an active touch MUST be unpressed!
+  std::vector<bool> controlHasOwner(_controls.size(), false);
+  for (UITouch* activeTouch in _owners) {
+    NSNumber* num = [_owners objectForKey:activeTouch];
+    if (num && num.unsignedIntegerValue < _controls.size()) {
+      controlHasOwner[num.unsignedIntegerValue] = true;
+    }
+  }
+
+  for (size_t i = 0; i < _controls.size(); ++i) {
+    if (!controlHasOwner[i]) {
+      _controls[i].pressed = false;
+      _controls[i].knob = CGPointZero;
+      _controls[i].dpad_bits = 0;
+    }
+  }
+
+  // Check if any steer arrow is still held
+  bool anyArrowHeld = false;
+  for (size_t i = 0; i < _controls.size(); ++i) {
+    if (_controls[i].kind == Kind::kSteerArrow && controlHasOwner[i] && _controls[i].pressed) {
+      anyArrowHeld = true;
+      _targetSteer = _controls[i].steer_val;
+      break;
+    }
+  }
+  if (!anyArrowHeld) {
+    // Check if steering stick is held
+    bool stickHeld = false;
+    for (size_t i = 0; i < _controls.size(); ++i) {
+      if (_controls[i].kind == Kind::kStick && _controls[i].axis == 0 && controlHasOwner[i]) {
+        stickHeld = true;
         break;
       }
     }
-    if (!still_held) {
-      c.pressed = false;
-      c.knob = CGPointZero;
-      c.dpad_bits = 0;
-      if (c.kind == Kind::kStick && c.axis == 0) {
-        _targetSteer = 0.0f;
-        _currentSteer = 0.0f;
-      } else if (c.kind == Kind::kSteerArrow) {
-        bool otherArrowHeld = false;
-        for (const Control& otherCtrl : _controls) {
-          if (otherCtrl.kind == Kind::kSteerArrow && otherCtrl.pressed) {
-            otherArrowHeld = true;
-            _targetSteer = otherCtrl.steer_val;
-            break;
-          }
-        }
-        if (!otherArrowHeld) {
-          _targetSteer = 0.0f;
-        }
-      }
+    if (!stickHeld) {
+      _targetSteer = 0.0f;
     }
   }
+
   [self sendState];
 }
 

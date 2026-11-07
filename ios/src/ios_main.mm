@@ -375,6 +375,8 @@ int RunGame(int argc, char* argv[], const fs::path& docs) {
 
   setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", REXCVAR_GET(ios_async_submits) ? "0" : "1", 1);
   setenv("MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS", "1", 1);
+  setenv("MVK_CONFIG_PRESENT_WITH_TRANSACTION", "0", 1);
+  setenv("MVK_CONFIG_FAST_MATH_ENABLED", "1", 1);
   setenv("MVK_CONFIG_RESUME_LOST_DEVICE", "0", 1);
   setenv("MTL_CAPTURE_ENABLED", REXCVAR_GET(ios_gpu_capture) ? "1" : "0", 1);
   if (REXCVAR_GET(ios_mvk_performance)) {

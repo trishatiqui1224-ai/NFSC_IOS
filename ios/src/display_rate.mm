@@ -118,14 +118,29 @@ void RequestRateForCap(int fps_cap) {
     link = [CADisplayLink displayLinkWithTarget:target selector:@selector(tick:)];
     [link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
   }
-  // For 60 fps cap on modern ProMotion displays (iPhone 13 Pro -> iPhone 17),
-  // NEVER allow the minimum frame rate to drop to 30 Hz: that causes iOS to throttle
-  // display refresh and downclock guest vblank. Ensure min_rate is at least 60.0f.
-  const float min_rate = match ? preferred : (fps_cap >= 60 ? 60.0f : (fps_cap == 40 ? 120.0f : 30.0f));
-  const float max_rate = (UIScreen.mainScreen.maximumFramesPerSecond >= 120 && (high || fps_cap == 60)) ? 120.0f : preferred;
-  link.preferredFrameRateRange = CAFrameRateRangeMake(min_rate, preferred, max_rate);
+  // Lock CADisplayLink rate range strictly to prevent ProMotion frequency-hopping jitter:
+  // On iPhone 13 Pro -> iPhone 17 (120 Hz ProMotion displays), leaving max_rate at 120 Hz while
+  // asking for 60 Hz causes iOS to fluctuate between 60, 80, and 120 Hz, which breaks the guest
+  // vblank phase lock and causes periodic micro-stuttering.
+  float min_rate = 60.0f;
+  float pref_rate = 60.0f;
+  float max_rate = 60.0f;
+
+  if (match) {
+    min_rate = pref_rate = max_rate = preferred;
+  } else if (high) {
+    min_rate = pref_rate = max_rate = 120.0f;
+  } else if (fps_cap == 30) {
+    min_rate = 30.0f;
+    pref_rate = 30.0f;
+    max_rate = 60.0f;
+  } else {
+    // 60 fps cap: lock strictly to 60.0 Hz for rock-solid 16.666 ms vblank cadence
+    min_rate = pref_rate = max_rate = 60.0f;
+  }
+  link.preferredFrameRateRange = CAFrameRateRangeMake(min_rate, pref_rate, max_rate);
   REXLOG_INFO("[display] cap {} fps: asking for min {:.0f} / pref {:.0f} / max {:.0f} Hz{} (screen max {} Hz)",
-              fps_cap, min_rate, preferred, max_rate,
+              fps_cap, min_rate, pref_rate, max_rate,
               match ? ", the cap's rate" : "", int(UIScreen.mainScreen.maximumFramesPerSecond));
 }
 
