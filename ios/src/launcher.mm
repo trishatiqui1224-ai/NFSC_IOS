@@ -283,18 +283,10 @@ NSString* AutoAspect() {
   return r >= 2.0 ? @"wide" : r <= 1.45 ? @"4:3" : @"16:9";
 }
 
-NSString* NativeScaleTitle() {
-  return [NSString stringWithFormat:@"Native · %.0fp (this screen)", ScreenPixels().height];
-}
-
-NSString* ScaleSummary() {
-  const CGSize px = ScreenPixels();
-  return [NSString stringWithFormat:
-      @"How many pixels the game is drawn with: 1x is the Xbox 360's 720p. Native draws as many as "
-      @"this screen shows (%.0f pixels high, about %.2fx), no more and no less. Higher is sharper and "
-      @"heavier: with the native renderer, 1.5x costs about half of 2x. Without it, the emulated "
-      @"renderer rounds to 1x or 2x.",
-      px.height, px.height / 720.0];
+// Preserve the effective scale of settings saved by earlier versions.
+NSString* VulkanScale(NSString* saved) {
+  const double scale = [saved isEqualToString:@"native"] ? ScreenPixels().height / 720.0 : saved.doubleValue;
+  return scale >= 1.75 ? @"2" : @"1";
 }
 
 const std::vector<Section>& Sections() {
@@ -341,11 +333,11 @@ const std::vector<Section>& Sections() {
             @"1080p",
             {{@"720p (1560x720)", @"720p"}, {@"900p (1950x900)", @"900p"}, {@"1080p (2340x1080)", @"1080p"},
              {@"Native Retina (2622x1206)", @"retina"}}},
-           {@"scale", Type::kChoice, @"Render resolution",
-            ScaleSummary(),
+           {@"scale", Type::kChoice, @"Internal render scale",
+            @"Vulkan renders at 1x or 2x the guest resolution. 2x renders four times as many pixels. "
+             "Display Resolution controls the output size separately. Changes apply at launch.",
             @"1",
-            {{@"0.85x · 612p", @"0.85"}, {@"1x · 720p (Xbox 360)", @"1"}, {@"1.25x · 900p", @"1.25"}, {@"1.5x · 1080p", @"1.5"},
-             {@"1.75x · 1260p", @"1.75"}, {@"2x · 1440p", @"2"}, {NativeScaleTitle(), @"native"}}},
+            {{@"1x · Guest resolution", @"1"}, {@"2x · Double guest resolution", @"2"}}},
            {@"metalfx_mode", Type::kChoice, @"MetalFX",
             @"Native renderer: Apple's MetalFX builds each frame from several, with the game's "
             @"motion: finer detail (thin, distant things stay whole) and anti-aliasing of its "
@@ -710,7 +702,7 @@ bool On(NSDictionary<NSString*, NSString*>* s, NSString* key);
 // its values; the ones chosen stay saved for when it is off again.
 NSString* BatteryValue(NSString* key) {
   static NSDictionary<NSString*, NSString*>* values = @{
-    @"scale" : @"0.85",
+    @"scale" : @"1",
     @"metalfx_mode" : @"off",
     @"antialiasing" : @"fxaa",
     @"anisotropic" : @"3",
@@ -754,6 +746,7 @@ NSString* Value(NSDictionary<NSString*, NSString*>* s, NSString* key) {
     return forced;
   }
   NSString* v = s[key];
+  if ([key isEqualToString:@"scale"]) return VulkanScale(v);
   // Battery mode keeps the cap at 30 or 40, as chosen (Stefan, Oct 28; it
   // forced 30 before 0.4.2): 60 and 120 become 30.
   if ([key isEqualToString:@"fps_cap"] && [s[@"battery_mode"] isEqualToString:@"true"] &&
@@ -767,9 +760,6 @@ NSString* Value(NSDictionary<NSString*, NSString*>* s, NSString* key) {
   if (v) {
     return v;
   }
-  // The render resolution's default: 1x (the Xbox 360's 720p) with either
-  // renderer: on a phone screen it is hard to tell from 1.5x, at about half
-  // the GPU work.
   const Option* o = FindOption(key);
   return o ? o->default_value : @"";
 }
@@ -814,14 +804,9 @@ std::vector<std::string> Arguments(NSDictionary<NSString*, NSString*>* s) {
   NSString* scene_res = Value(s, @"scene_res") ?: @"retina";
   a.push_back("--ios_display_preset=" + std::string(scene_res.UTF8String));
 
-  // Render scale for emulated renderer
-  NSString* scale = Value(s, @"scale");
-  const double scale_value = [scale isEqualToString:@"native"] ? ScreenPixels().height / 720.0 : scale.doubleValue;
-  const int whole_scale = std::clamp(int(scale_value + 0.25), 1, 2);
-  // iOS host swapchain must always use Retina backing store (2622x1206 on iPhone)
-  // to prevent SDL/MoltenVK coordinate and viewport mismatches.
+  // Keep Retina backing for SDL/MoltenVK coordinates and viewports.
   a.push_back("--ios_retina=true");
-  a.push_back("--resolution_scale=" + std::to_string(whole_scale));
+  a.push_back("--resolution_scale=" + str(@"scale"));
 
   // FPS cap and display
   a.push_back("--ios_fps_cap=" + str(@"fps_cap"));
